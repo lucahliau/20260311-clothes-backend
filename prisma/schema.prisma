@@ -8,9 +8,11 @@ datasource db {
 }
 
 model User {
-  id                   String   @id @default(uuid())
-  email                String   @unique
-  username             String   @unique
+  id                   String    @id @default(uuid())
+  email                String    @unique
+  username             String    @unique
+  passwordHash         String?
+  appleId              String?   @unique
   firstName            String?
   lastName             String?
   avatarUrl            String?
@@ -21,12 +23,28 @@ model User {
   stylePreferences     String[]
   favoriteBrands       String[]
   preferredSizes       Json?
-  onboardingCompleted  Boolean  @default(false)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  onboardingCompleted  Boolean   @default(false)
+  refreshTokenHash     String?
+  resetTokenHash       String?
+  resetTokenExpiry     DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  swipes      Swipe[]
-  collections Collection[]
+  swipes       Swipe[]
+  collections  Collection[]
+  deviceTokens DeviceToken[]
+}
+
+model DeviceToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  platform  String   @default("ios")
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model ClothingItem {
