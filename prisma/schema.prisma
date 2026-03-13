@@ -4,7 +4,104 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+}
+
+model User {
+  id                   String   @id @default(uuid())
+  email                String   @unique
+  username             String   @unique
+  firstName            String?
+  lastName             String?
+  avatarUrl            String?
+  dateOfBirth          DateTime?
+  gender               String?
+  location             String?
+  bio                  String?
+  stylePreferences     String[]
+  favoriteBrands       String[]
+  preferredSizes       Json?
+  onboardingCompleted  Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  swipes      Swipe[]
+  collections Collection[]
+}
+
+model ClothingItem {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  brand       String
+  category    String
+  subcategory String?
+  price       Decimal  @db.Decimal(10, 2)
+  currency    String   @default("USD")
+  imageUrl    String
+  images      String[]
+  colors      String[]
+  sizes       String[]
+  tags        String[]
+  gender      String?
+  sourceUrl   String?
+  metadata    Json?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  swipes          Swipe[]
+  collectionItems CollectionItem[]
+
+  @@index([category])
+  @@index([brand])
+  @@index([gender])
+  @@index([active])
+}
+
+enum SwipeAction {
+  LIKE
+  PASS
+  SUPERLIKE
+}
+
+model Swipe {
+  id        String      @id @default(uuid())
+  userId    String
+  itemId    String
+  action    SwipeAction
+  createdAt DateTime    @default(now())
+
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item ClothingItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemId])
+  @@index([userId])
+  @@index([itemId])
+}
+
+model Collection {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String
+  coverUrl  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CollectionItem[]
+
+  @@index([userId])
+}
+
+model CollectionItem {
+  id           String   @id @default(uuid())
+  collectionId String
+  itemId       String
+  addedAt      DateTime @default(now())
+
+  collection Collection   @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  item       ClothingItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, itemId])
 }
