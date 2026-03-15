@@ -23,6 +23,45 @@ const APPLE_ISSUER = "https://appleid.apple.com";
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Build a consistent user object for auth responses (avoids Swift Codable "missing" errors) */
+function toAuthUser(user: {
+  id: string;
+  email: string;
+  username: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  avatarUrl?: string | null;
+  dateOfBirth?: Date | null;
+  gender?: string | null;
+  location?: string | null;
+  bio?: string | null;
+  stylePreferences?: string[];
+  favoriteBrands?: string[];
+  preferredSizes?: unknown;
+  onboardingCompleted?: boolean;
+  createdAt?: Date;
+  updatedAt?: Date;
+}) {
+  return {
+    id: user.id,
+    email: user.email,
+    username: user.username,
+    firstName: user.firstName ?? null,
+    lastName: user.lastName ?? null,
+    avatarUrl: user.avatarUrl ?? null,
+    dateOfBirth: user.dateOfBirth ? user.dateOfBirth.toISOString() : null,
+    gender: user.gender ?? null,
+    location: user.location ?? null,
+    bio: user.bio ?? null,
+    stylePreferences: user.stylePreferences ?? [],
+    favoriteBrands: user.favoriteBrands ?? [],
+    preferredSizes: user.preferredSizes ?? null,
+    onboardingCompleted: user.onboardingCompleted ?? false,
+    createdAt: user.createdAt ? user.createdAt.toISOString() : new Date().toISOString(),
+    updatedAt: user.updatedAt ? user.updatedAt.toISOString() : new Date().toISOString(),
+  };
+}
+
 function generateAccessToken(userId: string, email: string): string {
   return jwt.sign({ userId, email }, process.env.JWT_SECRET!, {
     expiresIn: ACCESS_TOKEN_EXPIRY,
@@ -95,7 +134,8 @@ const resetPasswordSchema = z.object({
 // ---------------------------------------------------------------------------
 
 router.post("/register", authLimiter, async (req: Request, res: Response) => {
-  const { email, username, password } = registerSchema.parse(req.body);
+  const body = req.body ?? {};
+  const { email, username, password } = registerSchema.parse(body);
 
   const existingUser = await prisma.user.findFirst({
     where: { OR: [{ email }, { username }] },
@@ -121,7 +161,7 @@ router.post("/register", authLimiter, async (req: Request, res: Response) => {
   const accessToken = generateAccessToken(user.id, user.email);
 
   res.status(201).json({
-    user: { id: user.id, email: user.email, username: user.username },
+    user: toAuthUser(user),
     accessToken,
     refreshToken: refresh.raw,
   });
@@ -132,7 +172,8 @@ router.post("/register", authLimiter, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.post("/login", authLimiter, async (req: Request, res: Response) => {
-  const { email, password } = loginSchema.parse(req.body);
+  const body = req.body ?? {};
+  const { email, password } = loginSchema.parse(body);
 
   const user = await prisma.user.findUnique({ where: { email } });
 
@@ -154,7 +195,7 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
   const accessToken = generateAccessToken(user.id, user.email);
 
   res.json({
-    user: { id: user.id, email: user.email, username: user.username },
+    user: toAuthUser(user),
     accessToken,
     refreshToken: refresh.raw,
   });
@@ -337,7 +378,7 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
   const accessToken = generateAccessToken(user.id, user.email);
 
   res.json({
-    user: { id: user.id, email: user.email, username: user.username },
+    user: toAuthUser(user),
     accessToken,
     refreshToken: refresh.raw,
     isNewUser: !user.onboardingCompleted,

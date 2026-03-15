@@ -62,19 +62,25 @@ model ClothingItem {
   sizes       String[]
   tags        String[]
   gender      String?
-  sourceUrl   String?
-  metadata    Json?
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  sourceUrl        String?
+  metadata         Json?
+  retailer         String?
+  externalId       String?
+  manufacturerCode String?
+  lastVerifiedAt   DateTime?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   swipes          Swipe[]
   collectionItems CollectionItem[]
 
+  @@unique([retailer, externalId])
   @@index([category])
   @@index([brand])
   @@index([gender])
   @@index([active])
+  @@index([retailer])
 }
 
 enum SwipeAction {
@@ -122,4 +128,16 @@ model CollectionItem {
   item       ClothingItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   @@unique([collectionId, itemId])
+}
+
+model ScrapedRaw {
+  id        String   @id @default(uuid())
+  sourceUrl String   @unique
+  retailer  String
+  html      String
+  scrapedAt DateTime @default(now())
+  processed Boolean  @default(false)
+
+  @@index([retailer])
+  @@index([processed])
 }
