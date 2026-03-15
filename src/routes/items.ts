@@ -73,7 +73,7 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     select: { itemId: true },
   });
 
-  const excludeIds = swipedItemIds.map((s) => s.itemId);
+  const excludeIds = swipedItemIds.map((s: { itemId: string }) => s.itemId);
 
   const where: Record<string, unknown> = {
     active: true,
