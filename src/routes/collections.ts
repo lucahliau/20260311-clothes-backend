@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
+import { AppError } from "../middleware/error.js";
 
 const router = Router();
 
@@ -41,16 +42,12 @@ router.get("/", async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.post("/", async (req: Request, res: Response) => {
-  const parsed = createCollectionSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
+  const { name } = createCollectionSchema.parse(req.body);
 
   const collection = await prisma.collection.create({
     data: {
       userId: req.user!.userId,
-      name: parsed.data.name,
+      name,
     },
   });
 
@@ -75,8 +72,7 @@ router.get("/:id", async (req: Request, res: Response) => {
   });
 
   if (!collection || collection.userId !== req.user!.userId) {
-    res.status(404).json({ error: "Collection not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Collection not found");
   }
 
   res.json(collection);
@@ -88,26 +84,20 @@ router.get("/:id", async (req: Request, res: Response) => {
 
 router.patch("/:id", async (req: Request, res: Response) => {
   const id = req.params.id as string;
-  const parsed = updateCollectionSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
+  const data = updateCollectionSchema.parse(req.body);
 
-  if (Object.keys(parsed.data).length === 0) {
-    res.status(400).json({ error: "No fields to update" });
-    return;
+  if (Object.keys(data).length === 0) {
+    throw new AppError(400, "BAD_REQUEST", "No fields to update");
   }
 
   const existing = await prisma.collection.findUnique({ where: { id } });
   if (!existing || existing.userId !== req.user!.userId) {
-    res.status(404).json({ error: "Collection not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Collection not found");
   }
 
   const collection = await prisma.collection.update({
     where: { id },
-    data: parsed.data,
+    data,
   });
 
   res.json(collection);
@@ -122,8 +112,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
 
   const existing = await prisma.collection.findUnique({ where: { id } });
   if (!existing || existing.userId !== req.user!.userId) {
-    res.status(404).json({ error: "Collection not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Collection not found");
   }
 
   await prisma.collection.delete({ where: { id } });
@@ -137,34 +126,27 @@ router.delete("/:id", async (req: Request, res: Response) => {
 
 router.post("/:id/items", async (req: Request, res: Response) => {
   const collectionId = req.params.id as string;
-  const parsed = addItemSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
+  const { itemId } = addItemSchema.parse(req.body);
 
   const collection = await prisma.collection.findUnique({ where: { id: collectionId } });
   if (!collection || collection.userId !== req.user!.userId) {
-    res.status(404).json({ error: "Collection not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Collection not found");
   }
 
-  const item = await prisma.clothingItem.findUnique({ where: { id: parsed.data.itemId, active: true } });
+  const item = await prisma.clothingItem.findUnique({ where: { id: itemId, active: true } });
   if (!item) {
-    res.status(404).json({ error: "Item not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Item not found");
   }
 
   const existing = await prisma.collectionItem.findUnique({
-    where: { collectionId_itemId: { collectionId, itemId: parsed.data.itemId } },
+    where: { collectionId_itemId: { collectionId, itemId } },
   });
   if (existing) {
-    res.status(409).json({ error: "Item is already in this collection" });
-    return;
+    throw new AppError(409, "CONFLICT", "Item is already in this collection");
   }
 
   const collectionItem = await prisma.collectionItem.create({
-    data: { collectionId, itemId: parsed.data.itemId },
+    data: { collectionId, itemId },
     include: { item: true },
   });
 
@@ -181,16 +163,14 @@ router.delete("/:id/items/:itemId", async (req: Request, res: Response) => {
 
   const collection = await prisma.collection.findUnique({ where: { id: collectionId } });
   if (!collection || collection.userId !== req.user!.userId) {
-    res.status(404).json({ error: "Collection not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Collection not found");
   }
 
   const collectionItem = await prisma.collectionItem.findUnique({
     where: { collectionId_itemId: { collectionId, itemId } },
   });
   if (!collectionItem) {
-    res.status(404).json({ error: "Item not in this collection" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Item not in this collection");
   }
 
   await prisma.collectionItem.delete({

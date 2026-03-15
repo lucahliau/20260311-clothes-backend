@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
+import { AppError } from "../middleware/error.js";
 
 const router = Router();
 
@@ -102,8 +103,7 @@ router.get("/:id", async (req: Request, res: Response) => {
   });
 
   if (!item) {
-    res.status(404).json({ error: "Item not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Item not found");
   }
 
   res.json(item);

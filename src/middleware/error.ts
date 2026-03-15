@@ -1,55 +1,86 @@
 import { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
 
-interface AppError extends Error {
-  statusCode?: number;
-  code?: string;
+export class AppError extends Error {
+  constructor(
+    public statusCode: number,
+    public code: string,
+    message: string,
+    public details?: unknown
+  ) {
+    super(message);
+    this.name = "AppError";
+  }
 }
 
-export function errorHandler(err: AppError, _req: Request, res: Response, _next: NextFunction) {
-  if (err instanceof ZodError) {
-    res.status(400).json({
-      error: {
-        code: "VALIDATION_ERROR",
-        message: "Validation failed",
-        details: err.flatten().fieldErrors,
-      },
-    });
-    return;
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  // 1. Determine Status Code, Error Code, Message, and Details
+  let statusCode = 500;
+  let code = "INTERNAL_ERROR";
+  let message = "Internal server error";
+  let details: unknown = undefined;
+
+  if (err instanceof AppError) {
+    statusCode = err.statusCode;
+    code = err.code;
+    message = err.message;
+    details = err.details;
+  } else if (err instanceof ZodError) {
+    statusCode = 400;
+    code = "VALIDATION_ERROR";
+    message = "Validation failed";
+    details = err.flatten().fieldErrors;
+  } else if (err instanceof Error) {
+    // Prisma known errors
+    if (err.constructor.name === "PrismaClientKnownRequestError") {
+      const prismaErr = err as any;
+      if (prismaErr.code === "P2002") {
+        statusCode = 409;
+        code = "CONFLICT";
+        message = "A record with that value already exists";
+        details = prismaErr.meta;
+      } else if (prismaErr.code === "P2025") {
+        statusCode = 404;
+        code = "NOT_FOUND";
+        message = "Record not found";
+      } else {
+        // Other Prisma errors
+        message = prismaErr.message;
+        details = prismaErr.meta;
+      }
+    } else {
+      // Generic Error
+      message = err.message;
+    }
   }
 
-  // Prisma known errors
-  if (err.constructor?.name === "PrismaClientKnownRequestError") {
-    const prismaErr = err as AppError & { code: string; meta?: Record<string, unknown> };
-
-    if (prismaErr.code === "P2002") {
-      res.status(409).json({
-        error: {
-          code: "CONFLICT",
-          message: "A record with that value already exists",
-          details: prismaErr.meta,
-        },
-      });
-      return;
-    }
-
-    if (prismaErr.code === "P2025") {
-      res.status(404).json({
-        error: { code: "NOT_FOUND", message: "Record not found" },
-      });
-      return;
-    }
+  // 2. Log the error with context (Skip logging for 404s/401s if desired, but here we log everything for clarity as requested)
+  // For 500s, log the stack trace. For others, just the message.
+  const isInternal = statusCode === 500;
+  
+  console.error(`[${new Date().toISOString()}] ${req.method} ${req.path} >> ${statusCode} ${code}`);
+  if (isInternal) {
+    console.error(err);
+  } else {
+    // Optional: Log non-500 errors as warnings if you want to see them in console
+    console.warn(`  Message: ${message}`);
+    if (details) console.warn(`  Details:`, JSON.stringify(details));
   }
 
-  const statusCode = err.statusCode || 500;
+  // 3. Send Response
   const isProduction = process.env.NODE_ENV === "production";
-
-  console.error("[Error]", err);
+  
+  // In production, hide 500 details
+  if (isProduction && isInternal) {
+    message = "Internal server error";
+    details = undefined;
+  }
 
   res.status(statusCode).json({
     error: {
-      code: err.code || "INTERNAL_ERROR",
-      message: isProduction && statusCode === 500 ? "Internal server error" : err.message,
+      code,
+      message,
+      details,
     },
   });
 }

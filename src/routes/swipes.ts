@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
+import { AppError } from "../middleware/error.js";
 
 const router = Router();
 
@@ -18,19 +19,12 @@ const swipeSchema = z.object({
 // ---------------------------------------------------------------------------
 
 router.post("/", requireAuth, async (req: Request, res: Response) => {
-  const parsed = swipeSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
-
-  const { itemId, action } = parsed.data;
+  const { itemId, action } = swipeSchema.parse(req.body);
   const userId = req.user!.userId;
 
   const item = await prisma.clothingItem.findUnique({ where: { id: itemId, active: true } });
   if (!item) {
-    res.status(404).json({ error: "Item not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Item not found");
   }
 
   const existing = await prisma.swipe.findUnique({
@@ -38,8 +32,7 @@ router.post("/", requireAuth, async (req: Request, res: Response) => {
   });
 
   if (existing) {
-    res.status(409).json({ error: "You have already swiped on this item" });
-    return;
+    throw new AppError(409, "CONFLICT", "You have already swiped on this item");
   }
 
   const swipe = await prisma.swipe.create({
@@ -100,8 +93,7 @@ router.delete("/last", requireAuth, async (req: Request, res: Response) => {
   });
 
   if (!lastSwipe) {
-    res.status(404).json({ error: "No swipes to undo" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "No swipes to undo");
   }
 
   await prisma.swipe.delete({ where: { id: lastSwipe.id } });

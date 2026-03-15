@@ -8,6 +8,7 @@ import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
 import { sendPasswordResetEmail } from "../lib/email.js";
+import { AppError } from "../middleware/error.js";
 
 const router = Router();
 
@@ -94,13 +95,7 @@ const resetPasswordSchema = z.object({
 // ---------------------------------------------------------------------------
 
 router.post("/register", authLimiter, async (req: Request, res: Response) => {
-  const parsed = registerSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
-
-  const { email, username, password } = parsed.data;
+  const { email, username, password } = registerSchema.parse(req.body);
 
   const existingUser = await prisma.user.findFirst({
     where: { OR: [{ email }, { username }] },
@@ -108,8 +103,7 @@ router.post("/register", authLimiter, async (req: Request, res: Response) => {
 
   if (existingUser) {
     const field = existingUser.email === email ? "email" : "username";
-    res.status(409).json({ error: `A user with that ${field} already exists` });
-    return;
+    throw new AppError(409, "CONFLICT", `A user with that ${field} already exists`);
   }
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -138,25 +132,17 @@ router.post("/register", authLimiter, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.post("/login", authLimiter, async (req: Request, res: Response) => {
-  const parsed = loginSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
-
-  const { email, password } = parsed.data;
+  const { email, password } = loginSchema.parse(req.body);
 
   const user = await prisma.user.findUnique({ where: { email } });
 
   if (!user || !user.passwordHash) {
-    res.status(401).json({ error: "Invalid email or password" });
-    return;
+    throw new AppError(401, "UNAUTHORIZED", "Invalid email or password");
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
-    res.status(401).json({ error: "Invalid email or password" });
-    return;
+    throw new AppError(401, "UNAUTHORIZED", "Invalid email or password");
   }
 
   const refresh = generateRefreshToken();
@@ -182,8 +168,7 @@ router.post("/refresh", async (req: Request, res: Response) => {
   const { refreshToken } = req.body as { refreshToken?: string };
 
   if (!refreshToken) {
-    res.status(400).json({ error: "refreshToken is required" });
-    return;
+    throw new AppError(400, "BAD_REQUEST", "refreshToken is required");
   }
 
   const hash = hashToken(refreshToken);
@@ -193,8 +178,7 @@ router.post("/refresh", async (req: Request, res: Response) => {
   });
 
   if (!user) {
-    res.status(401).json({ error: "Invalid refresh token" });
-    return;
+    throw new AppError(401, "UNAUTHORIZED", "Invalid refresh token");
   }
 
   const newRefresh = generateRefreshToken();
@@ -228,8 +212,7 @@ router.post("/logout", requireAuth, async (req: Request, res: Response) => {
 router.post("/forgot-password", authLimiter, async (req: Request, res: Response) => {
   const parsed = resetRequestSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "A valid email is required" });
-    return;
+    throw new AppError(400, "BAD_REQUEST", "A valid email is required");
   }
 
   // Always return 200 to avoid leaking whether the email exists
@@ -259,13 +242,7 @@ router.post("/forgot-password", authLimiter, async (req: Request, res: Response)
 // ---------------------------------------------------------------------------
 
 router.post("/reset-password", async (req: Request, res: Response) => {
-  const parsed = resetPasswordSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
-
-  const { token, password } = parsed.data;
+  const { token, password } = resetPasswordSchema.parse(req.body);
   const hash = hashToken(token);
 
   const user = await prisma.user.findFirst({
@@ -276,8 +253,7 @@ router.post("/reset-password", async (req: Request, res: Response) => {
   });
 
   if (!user) {
-    res.status(400).json({ error: "Invalid or expired reset token" });
-    return;
+    throw new AppError(400, "BAD_REQUEST", "Invalid or expired reset token");
   }
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -300,18 +276,11 @@ router.post("/reset-password", async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.post("/apple", authLimiter, async (req: Request, res: Response) => {
-  const parsed = appleAuthSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
-
-  const { identityToken, fullName } = parsed.data;
+  const { identityToken, fullName } = appleAuthSchema.parse(req.body);
 
   const clientId = process.env.APPLE_CLIENT_ID;
   if (!clientId) {
-    res.status(503).json({ error: "Apple Sign-In is not configured" });
-    return;
+    throw new AppError(503, "SERVICE_UNAVAILABLE", "Apple Sign-In is not configured");
   }
 
   let applePayload: jose.JWTPayload;
@@ -322,16 +291,14 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
     });
     applePayload = payload;
   } catch {
-    res.status(401).json({ error: "Invalid Apple identity token" });
-    return;
+    throw new AppError(401, "UNAUTHORIZED", "Invalid Apple identity token");
   }
 
   const appleId = applePayload.sub;
   const appleEmail = applePayload.email as string | undefined;
 
   if (!appleId) {
-    res.status(401).json({ error: "Invalid Apple identity token: missing subject" });
-    return;
+    throw new AppError(401, "UNAUTHORIZED", "Invalid Apple identity token: missing subject");
   }
 
   let user = await prisma.user.findUnique({ where: { appleId } });
@@ -382,24 +349,16 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.post("/change-password", requireAuth, async (req: Request, res: Response) => {
-  const parsed = changePasswordSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
-
-  const { currentPassword, newPassword } = parsed.data;
+  const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
 
   const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
   if (!user || !user.passwordHash) {
-    res.status(400).json({ error: "Password change not available for this account" });
-    return;
+    throw new AppError(400, "BAD_REQUEST", "Password change not available for this account");
   }
 
   const valid = await bcrypt.compare(currentPassword, user.passwordHash);
   if (!valid) {
-    res.status(401).json({ error: "Current password is incorrect" });
-    return;
+    throw new AppError(401, "UNAUTHORIZED", "Current password is incorrect");
   }
 
   const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);

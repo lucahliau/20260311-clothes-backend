@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createAvatarUploadUrl } from "../lib/supabase.js";
+import { AppError } from "../middleware/error.js";
 
 const router = Router();
 
@@ -56,8 +57,7 @@ router.get("/me", requireAuth, async (req: Request, res: Response) => {
   });
 
   if (!user) {
-    res.status(404).json({ error: "User not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "User not found");
   }
 
   res.json(user);
@@ -68,20 +68,15 @@ router.get("/me", requireAuth, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.patch("/me", requireAuth, async (req: Request, res: Response) => {
-  const parsed = updateProfileSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
+  const data = updateProfileSchema.parse(req.body);
 
-  if (Object.keys(parsed.data).length === 0) {
-    res.status(400).json({ error: "No fields to update" });
-    return;
+  if (Object.keys(data).length === 0) {
+    throw new AppError(400, "BAD_REQUEST", "No fields to update");
   }
 
   const user = await prisma.user.update({
     where: { id: req.user!.userId },
-    data: parsed.data,
+    data,
     omit: PRIVATE_FIELDS,
   });
 
@@ -102,19 +97,15 @@ router.delete("/me", requireAuth, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.post("/me/onboarding", requireAuth, async (req: Request, res: Response) => {
-  const parsed = onboardingSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
+  const data = onboardingSchema.parse(req.body);
 
   const user = await prisma.user.update({
     where: { id: req.user!.userId },
     data: {
-      stylePreferences: parsed.data.stylePreferences,
-      favoriteBrands: parsed.data.favoriteBrands,
-      preferredSizes: parsed.data.preferredSizes,
-      gender: parsed.data.gender,
+      stylePreferences: data.stylePreferences,
+      favoriteBrands: data.favoriteBrands,
+      preferredSizes: data.preferredSizes,
+      gender: data.gender,
       onboardingCompleted: true,
     },
     omit: PRIVATE_FIELDS,
@@ -128,18 +119,14 @@ router.post("/me/onboarding", requireAuth, async (req: Request, res: Response) =
 // ---------------------------------------------------------------------------
 
 router.post("/me/avatar-upload-url", requireAuth, async (req: Request, res: Response) => {
-  const parsed = avatarUploadSchema.safeParse(req.body || {});
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
+  const data = avatarUploadSchema.parse(req.body || {});
 
   try {
-    const result = await createAvatarUploadUrl(req.user!.userId, parsed.data.fileExt);
+    const result = await createAvatarUploadUrl(req.user!.userId, data.fileExt);
     res.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to create upload URL";
-    res.status(500).json({ error: message });
+    throw new AppError(500, "UPLOAD_ERROR", message);
   }
 });
 
@@ -148,14 +135,10 @@ router.post("/me/avatar-upload-url", requireAuth, async (req: Request, res: Resp
 // ---------------------------------------------------------------------------
 
 router.post("/me/device-tokens", requireAuth, async (req: Request, res: Response) => {
-  const parsed = deviceTokenSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
-    return;
-  }
+  const data = deviceTokenSchema.parse(req.body);
 
   const existing = await prisma.deviceToken.findUnique({
-    where: { token: parsed.data.token },
+    where: { token: data.token },
   });
 
   if (existing) {
@@ -172,8 +155,8 @@ router.post("/me/device-tokens", requireAuth, async (req: Request, res: Response
   await prisma.deviceToken.create({
     data: {
       userId: req.user!.userId,
-      token: parsed.data.token,
-      platform: parsed.data.platform,
+      token: data.token,
+      platform: data.platform,
     },
   });
 
@@ -190,8 +173,7 @@ router.delete("/me/device-tokens/:token", requireAuth, async (req: Request, res:
   const existing = await prisma.deviceToken.findUnique({ where: { token } });
 
   if (!existing || existing.userId !== req.user!.userId) {
-    res.status(404).json({ error: "Device token not found" });
-    return;
+    throw new AppError(404, "NOT_FOUND", "Device token not found");
   }
 
   await prisma.deviceToken.delete({ where: { id: existing.id } });
