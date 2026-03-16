@@ -159,16 +159,16 @@ async function main() {
   const swipeData: { itemIndex: number; action: SwipeAction }[] = [
     { itemIndex: 1, action: "LIKE" },       // Oversized Graphic Tee
     { itemIndex: 4, action: "LIKE" },       // Ribbed Crop Tank
-    { itemIndex: 14, action: "SUPERLIKE" }, // Cargo Joggers
-    { itemIndex: 30, action: "SUPERLIKE" }, // Air Force 1
+    { itemIndex: 14, action: "LOVE" },       // Cargo Joggers
+    { itemIndex: 30, action: "LOVE" },       // Air Force 1
     { itemIndex: 33, action: "LIKE" },      // Samba OG
     { itemIndex: 31, action: "LIKE" },      // Chuck Taylor 70
     { itemIndex: 0, action: "LIKE" },       // Crew Neck Tee
-    { itemIndex: 2, action: "PASS" },       // Oxford Shirt
-    { itemIndex: 15, action: "PASS" },      // Pleated Trousers
-    { itemIndex: 25, action: "PASS" },      // Wool Overcoat
+    { itemIndex: 2, action: "DISLIKE" },    // Oxford Shirt
+    { itemIndex: 15, action: "DISLIKE" },   // Pleated Trousers
+    { itemIndex: 25, action: "DISLIKE" },   // Wool Overcoat
     { itemIndex: 20, action: "LIKE" },      // Denim Jacket
-    { itemIndex: 8, action: "LIKE" },       // Breton Stripe
+    { itemIndex: 8, action: "NEUTRAL" },    // Breton Stripe
     { itemIndex: 49, action: "LIKE" },      // Baseball Cap
   ];
 

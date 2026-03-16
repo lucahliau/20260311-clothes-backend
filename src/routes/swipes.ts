@@ -11,7 +11,7 @@ const MAX_PAGE_SIZE = 100;
 
 const swipeSchema = z.object({
   itemId: z.string().uuid(),
-  action: z.enum(["LIKE", "PASS", "SUPERLIKE"]),
+  action: z.enum(["LOVE", "LIKE", "DISLIKE", "NEUTRAL"]),
 });
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ router.get("/history", requireAuth, async (req: Request, res: Response) => {
   const where: Record<string, unknown> = { userId: req.user!.userId };
 
   const actionFilter = req.query.action as string | undefined;
-  if (actionFilter && ["LIKE", "PASS", "SUPERLIKE"].includes(actionFilter)) {
+  if (actionFilter && ["LOVE", "LIKE", "DISLIKE", "NEUTRAL"].includes(actionFilter)) {
     where.action = actionFilter;
   }
 

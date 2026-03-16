@@ -84,9 +84,10 @@ model ClothingItem {
 }
 
 enum SwipeAction {
+  LOVE
   LIKE
-  PASS
-  SUPERLIKE
+  DISLIKE
+  NEUTRAL
 }
 
 model Swipe {
