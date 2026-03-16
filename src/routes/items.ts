@@ -1,7 +1,5 @@
 import { Router, Request, Response } from "express";
 import { prisma } from "../lib/prisma.js";
-import { env } from "../lib/env.js";
-import { getNobgUrl, nobgExists } from "../lib/images.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 
@@ -9,7 +7,6 @@ const router = Router();
 
 const DEFAULT_PAGE_SIZE = 1000;
 const MAX_PAGE_SIZE = 4000;
-const FETCH_MULTIPLIER = 10;
 
 // ---------------------------------------------------------------------------
 // GET /items
@@ -86,25 +83,11 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   if (req.query.category) where.category = req.query.category;
   if (req.query.gender) where.gender = req.query.gender;
 
-  const r2BaseUrl = env().R2_PUBLIC_URL;
-  const fetchSize = r2BaseUrl ? limit * FETCH_MULTIPLIER : limit;
-
-  let items = await prisma.clothingItem.findMany({
+  const items = await prisma.clothingItem.findMany({
     where,
-    take: fetchSize,
+    take: limit,
     orderBy: { createdAt: "desc" },
   });
-
-  if (r2BaseUrl) {
-    const checks = await Promise.all(
-      items.map(async (item) => {
-        const nobgUrl = getNobgUrl(item.imageUrl, r2BaseUrl);
-        if (!nobgUrl) return false;
-        return nobgExists(nobgUrl);
-      })
-    );
-    items = items.filter((_, i) => checks[i]).slice(0, limit);
-  }
 
   res.json({ items, remaining: items.length });
 });
