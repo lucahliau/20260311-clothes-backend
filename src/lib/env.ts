@@ -20,6 +20,8 @@ const envSchema = z.object({
   APNS_TEAM_ID: z.string().optional(),
   APNS_BUNDLE_ID: z.string().optional(),
   APNS_KEY_PATH: z.string().optional(),
+
+  R2_PUBLIC_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
