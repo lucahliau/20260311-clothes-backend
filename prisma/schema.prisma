@@ -62,6 +62,7 @@ model ClothingItem {
   sizes       String[]
   tags        String[]
   gender      String?
+  productType String?
   sourceUrl        String?
   metadata         Json?
   retailer         String?
@@ -79,6 +80,7 @@ model ClothingItem {
   @@index([category])
   @@index([brand])
   @@index([gender])
+  @@index([productType])
   @@index([active])
   @@index([retailer])
 }

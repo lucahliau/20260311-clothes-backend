@@ -23,6 +23,7 @@ router.get("/", async (req: Request, res: Response) => {
   if (req.query.subcategory) where.subcategory = req.query.subcategory;
   if (req.query.brand) where.brand = req.query.brand;
   if (req.query.gender) where.gender = req.query.gender;
+  if (req.query.productType) where.productType = req.query.productType;
 
   if (req.query.minPrice || req.query.maxPrice) {
     const price: Record<string, number> = {};
@@ -82,6 +83,7 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
 
   if (req.query.category) where.category = req.query.category;
   if (req.query.gender) where.gender = req.query.gender;
+  if (req.query.productType) where.productType = req.query.productType;
 
   const items = await prisma.clothingItem.findMany({
     where,
