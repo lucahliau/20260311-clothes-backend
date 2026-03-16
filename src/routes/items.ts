@@ -7,8 +7,8 @@ import { AppError } from "../middleware/error.js";
 
 const router = Router();
 
-const DEFAULT_PAGE_SIZE = 20;
-const MAX_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 1000;
+const MAX_PAGE_SIZE = 4000;
 const FETCH_MULTIPLIER = 10;
 
 // ---------------------------------------------------------------------------
