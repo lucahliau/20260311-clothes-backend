@@ -6,9 +6,29 @@ import { AppError } from "../middleware/error.js";
 const router = Router();
 
 const DEFAULT_PAGE_SIZE = 1000;
+const FEED_DEFAULT_LIMIT = 50;
+const MAX_EXCLUDE_IDS = 1000; // cap notIn size to avoid query timeouts
 // UUID v4 format: 8-4-4-4-12
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PAGE_SIZE = 4000;
+
+const VALID_GENDERS = new Set(["male", "female", "unisex", "men", "women"]);
+const VALID_PRODUCT_TYPES = new Set(["tops", "bottoms", "bags", "accessories", "jackets", "other"]);
+
+function parseGender(val: unknown): string | string[] | null {
+  if (typeof val !== "string" || !val.trim()) return null;
+  const g = val.trim().toLowerCase();
+  if (!VALID_GENDERS.has(g)) return null;
+  if (g === "men") return ["male", "men"];
+  if (g === "women") return ["female", "women"];
+  return g;
+}
+
+function parseProductType(val: unknown): string | null {
+  if (typeof val !== "string" || !val.trim()) return null;
+  const p = val.trim().toLowerCase();
+  return VALID_PRODUCT_TYPES.has(p) ? p : null;
+}
 
 // ---------------------------------------------------------------------------
 // GET /items
@@ -24,8 +44,10 @@ router.get("/", async (req: Request, res: Response) => {
   if (req.query.category) where.category = req.query.category;
   if (req.query.subcategory) where.subcategory = req.query.subcategory;
   if (req.query.brand) where.brand = req.query.brand;
-  if (req.query.gender) where.gender = req.query.gender;
-  if (req.query.productType) where.productType = req.query.productType;
+  const gender = parseGender(req.query.gender);
+  if (gender) where.gender = Array.isArray(gender) ? { in: gender } : gender;
+  const productType = parseProductType(req.query.productType);
+  if (productType) where.productType = productType;
 
   if (req.query.minPrice || req.query.maxPrice) {
     const price: Record<string, number> = {};
@@ -68,12 +90,14 @@ router.get("/", async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.get("/feed", requireAuth, async (req: Request, res: Response) => {
-  const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
+  const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || FEED_DEFAULT_LIMIT));
   const userId = req.user!.userId;
 
   const swipedItemIds = await prisma.swipe.findMany({
     where: { userId },
     select: { itemId: true },
+    orderBy: { createdAt: "desc" },
+    take: MAX_EXCLUDE_IDS,
   });
 
   const excludeIds = swipedItemIds
@@ -86,8 +110,10 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   };
 
   if (req.query.category) where.category = req.query.category;
-  if (req.query.gender) where.gender = req.query.gender;
-  if (req.query.productType) where.productType = req.query.productType;
+  const gender = parseGender(req.query.gender);
+  if (gender) where.gender = Array.isArray(gender) ? { in: gender } : gender;
+  const productType = parseProductType(req.query.productType);
+  if (productType) where.productType = productType;
 
   const items = await prisma.clothingItem.findMany({
     where,
