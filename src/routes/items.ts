@@ -6,6 +6,8 @@ import { AppError } from "../middleware/error.js";
 const router = Router();
 
 const DEFAULT_PAGE_SIZE = 1000;
+// UUID v4 format: 8-4-4-4-12
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PAGE_SIZE = 4000;
 
 // ---------------------------------------------------------------------------
@@ -74,7 +76,9 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     select: { itemId: true },
   });
 
-  const excludeIds = swipedItemIds.map((s: { itemId: string }) => s.itemId);
+  const excludeIds = swipedItemIds
+    .map((s) => s.itemId)
+    .filter((id) => UUID_REGEX.test(id));
 
   const where: Record<string, unknown> = {
     active: true,
