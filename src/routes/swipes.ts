@@ -14,6 +14,10 @@ const swipeSchema = z.object({
   action: z.enum(["LOVE", "LIKE", "DISLIKE", "NEUTRAL"]),
 });
 
+const updateSwipeSchema = z.object({
+  action: z.enum(["LOVE", "LIKE", "DISLIKE", "NEUTRAL"]),
+});
+
 // ---------------------------------------------------------------------------
 // POST /swipes
 // ---------------------------------------------------------------------------
@@ -99,6 +103,35 @@ router.delete("/last", requireAuth, async (req: Request, res: Response) => {
   await prisma.swipe.delete({ where: { id: lastSwipe.id } });
 
   res.json({ message: "Last swipe undone", undone: lastSwipe });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /swipes/:id
+// ---------------------------------------------------------------------------
+
+router.patch("/:id", requireAuth, async (req: Request, res: Response) => {
+  const id = typeof req.params.id === "string" ? req.params.id : req.params.id?.[0];
+  if (!id) {
+    throw new AppError(400, "BAD_REQUEST", "Invalid swipe ID");
+  }
+  const { action } = updateSwipeSchema.parse(req.body);
+  const userId = req.user!.userId;
+
+  const existing = await prisma.swipe.findUnique({
+    where: { id },
+  });
+
+  if (!existing || existing.userId !== userId) {
+    throw new AppError(404, "NOT_FOUND", "Swipe not found");
+  }
+
+  const swipe = await prisma.swipe.update({
+    where: { id },
+    data: { action },
+    include: { item: true },
+  });
+
+  res.json(swipe);
 });
 
 export default router;
