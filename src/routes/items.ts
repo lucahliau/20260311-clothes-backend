@@ -30,6 +30,15 @@ function parseProductType(val: unknown): string | null {
   return VALID_PRODUCT_TYPES.has(p) ? p : null;
 }
 
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 // ---------------------------------------------------------------------------
 // GET /items
 // ---------------------------------------------------------------------------
@@ -106,6 +115,7 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
 
   const where: Record<string, unknown> = {
     active: true,
+    hasNobg: true,
     ...(excludeIds.length > 0 && { id: { notIn: excludeIds } }),
   };
 
@@ -115,11 +125,13 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   const productType = parseProductType(req.query.productType);
   if (productType) where.productType = productType;
 
-  const items = await prisma.clothingItem.findMany({
+  const poolSize = Math.min(limit * 10, 500);
+  const pool = await prisma.clothingItem.findMany({
     where,
-    take: limit,
+    take: poolSize,
     orderBy: { createdAt: "desc" },
   });
+  const items = shuffle(pool).slice(0, limit);
 
   res.json({ items, remaining: items.length });
 });
