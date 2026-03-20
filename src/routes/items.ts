@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
@@ -28,15 +29,6 @@ function parseProductType(val: unknown): string | null {
   if (typeof val !== "string" || !val.trim()) return null;
   const p = val.trim().toLowerCase();
   return VALID_PRODUCT_TYPES.has(p) ? p : null;
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,25 +105,49 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     .map((s) => s.itemId)
     .filter((id) => UUID_REGEX.test(id));
 
-  const where: Record<string, unknown> = {
-    active: true,
-    hasNobg: true,
-    ...(excludeIds.length > 0 && { id: { notIn: excludeIds } }),
-  };
-
-  if (req.query.category) where.category = req.query.category;
+  const sqlWhere: Prisma.Sql[] = [
+    Prisma.sql`active = true`,
+    Prisma.sql`"hasNobg" = true`,
+  ];
+  if (excludeIds.length > 0) {
+    sqlWhere.push(Prisma.sql`id NOT IN (${Prisma.join(excludeIds)})`);
+  }
+  if (typeof req.query.category === "string" && req.query.category.trim()) {
+    sqlWhere.push(Prisma.sql`category = ${req.query.category.trim()}`);
+  }
   const gender = parseGender(req.query.gender);
-  if (gender) where.gender = Array.isArray(gender) ? { in: gender } : gender;
+  if (gender) {
+    if (Array.isArray(gender)) {
+      sqlWhere.push(Prisma.sql`gender IN (${Prisma.join(gender)})`);
+    } else {
+      sqlWhere.push(Prisma.sql`gender = ${gender}`);
+    }
+  }
   const productType = parseProductType(req.query.productType);
-  if (productType) where.productType = productType;
+  if (productType) {
+    sqlWhere.push(Prisma.sql`"productType" = ${productType}`);
+  }
 
-  const poolSize = Math.min(limit * 10, 500);
-  const pool = await prisma.clothingItem.findMany({
-    where,
-    take: poolSize,
-    orderBy: { createdAt: "desc" },
+  const idRows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "ClothingItem"
+    WHERE ${Prisma.join(sqlWhere, " AND ")}
+    ORDER BY RANDOM()
+    LIMIT ${limit}
+  `;
+
+  const idOrder = idRows.map((r) => r.id);
+  if (idOrder.length === 0) {
+    res.json({ items: [], remaining: 0 });
+    return;
+  }
+
+  const rows = await prisma.clothingItem.findMany({
+    where: { id: { in: idOrder } },
   });
-  const items = shuffle(pool).slice(0, limit);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const items: ClothingItem[] = idOrder
+    .map((id) => byId.get(id))
+    .filter((x): x is ClothingItem => x !== undefined);
 
   res.json({ items, remaining: items.length });
 });
