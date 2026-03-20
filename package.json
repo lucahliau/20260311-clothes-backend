@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "prisma generate && tsc",
-    "start": "node dist/src/index.js",
+    "start": "prisma migrate deploy && node dist/src/index.js",
     "seed": "npx prisma db seed",
     "tag-gender-type": "tsx scripts/tag-gender-product-type.ts",
     "populate-has-nobg": "tsx scripts/populate-has-nobg.ts",

@@ -20,6 +20,10 @@ import collectionsRouter from "./routes/collections.js";
 
 const app = express();
 
+if (env().NODE_ENV === "production" || process.env.TRUST_PROXY === "1") {
+  app.set("trust proxy", 1);
+}
+
 app.use(helmet());
 app.use(
   cors(
