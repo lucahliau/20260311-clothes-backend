@@ -8,13 +8,14 @@
  */
 export function getNobgUrl(originalUrl: string, r2BaseUrl: string): string | null {
   const base = r2BaseUrl.replace(/\/$/, "");
+  const cleanUrl = originalUrl.split("?")[0].split("#")[0];
 
   let path: string;
 
-  if (originalUrl.startsWith(base)) {
-    path = originalUrl.slice(base.length).replace(/^\//, "");
-  } else if (originalUrl.startsWith("products/")) {
-    path = originalUrl;
+  if (cleanUrl.startsWith(base)) {
+    path = cleanUrl.slice(base.length).replace(/^\//, "");
+  } else if (cleanUrl.startsWith("products/")) {
+    path = cleanUrl;
   } else {
     return null;
   }
@@ -40,7 +41,16 @@ export function getNobgUrl(originalUrl: string, r2BaseUrl: string): string | nul
 export async function nobgExists(nobgUrl: string): Promise<boolean> {
   try {
     const res = await fetch(nobgUrl, { method: "HEAD" });
-    return res.ok;
+    if (res.ok) return true;
+  } catch {
+    // R2/public buckets sometimes block HEAD; try GET with minimal range
+  }
+  try {
+    const res = await fetch(nobgUrl, {
+      method: "GET",
+      headers: { Range: "bytes=0-0" },
+    });
+    return res.ok && (res.status === 200 || res.status === 206);
   } catch {
     return false;
   }
