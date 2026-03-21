@@ -6,12 +6,13 @@ import { AppError } from "../middleware/error.js";
 
 const router = Router();
 
-const DEFAULT_PAGE_SIZE = 1000;
+/** High ceiling for `limit`; default is large so search/brand views are rarely truncated. Use `page` for bigger catalogs. */
+const DEFAULT_PAGE_SIZE = 50_000;
 const FEED_DEFAULT_LIMIT = 50;
 const MAX_EXCLUDE_IDS = 1000; // cap notIn size to avoid query timeouts
 // UUID v4 format: 8-4-4-4-12
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_PAGE_SIZE = 4000;
+const MAX_PAGE_SIZE = 500_000;
 
 const VALID_GENDERS = new Set(["male", "female", "unisex", "men", "women"]);
 const VALID_PRODUCT_TYPES = new Set(["tops", "bottoms", "bags", "accessories", "jackets", "other"]);
@@ -106,7 +107,10 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     .map((s) => s.itemId)
     .filter((id) => UUID_REGEX.test(id));
 
-  const sqlWhere: Prisma.Sql[] = [Prisma.sql`active = true`];
+  const sqlWhere: Prisma.Sql[] = [
+    Prisma.sql`active = true`,
+    Prisma.sql`"hasNobg" = true`,
+  ];
   if (excludeIds.length > 0) {
     sqlWhere.push(Prisma.sql`id NOT IN (${Prisma.join(excludeIds)})`);
   }

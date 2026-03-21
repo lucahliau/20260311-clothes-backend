@@ -4,10 +4,12 @@ import { prisma } from "../lib/prisma.js";
 
 const router = Router();
 
-const DEFAULT_LIST_LIMIT = 20;
-const MAX_LIST_LIMIT = 100;
+/** Effectively “all brands” for distinct-brand listing; still capped to avoid abuse. */
+const DEFAULT_LIST_LIMIT = 100_000;
+const MAX_LIST_LIMIT = 500_000;
 const DEFAULT_EXPLORE_LIMIT = 12;
-const MAX_EXPLORE_LIMIT = 50;
+/** Max rows returned by the random explore query (distinct brand groups). */
+const MAX_EXPLORE_LIMIT = 100_000;
 
 // ---------------------------------------------------------------------------
 // GET /brands/explore
