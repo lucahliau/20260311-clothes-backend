@@ -15,6 +15,7 @@ import { errorHandler } from "./middleware/error.js";
 import authRouter from "./routes/auth.js";
 import usersRouter from "./routes/users.js";
 import itemsRouter from "./routes/items.js";
+import brandsRouter from "./routes/brands.js";
 import swipesRouter from "./routes/swipes.js";
 import collectionsRouter from "./routes/collections.js";
 
@@ -48,6 +49,7 @@ app.get("/health", async (_req, res) => {
 app.use("/auth", authRouter);
 app.use("/users", usersRouter);
 app.use("/items", itemsRouter);
+app.use("/brands", brandsRouter);
 app.use("/swipes", swipesRouter);
 app.use("/collections", collectionsRouter);
 

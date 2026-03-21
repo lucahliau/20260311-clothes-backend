@@ -40,18 +40,18 @@ router.get("/", async (req: Request, res: Response) => {
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
   const skip = (page - 1) * limit;
 
-  const where: Record<string, unknown> = { active: true };
+  const where: Prisma.ClothingItemWhereInput = { active: true };
 
-  if (req.query.category) where.category = req.query.category;
-  if (req.query.subcategory) where.subcategory = req.query.subcategory;
-  if (req.query.brand) where.brand = req.query.brand;
+  if (req.query.category) where.category = String(req.query.category);
+  if (req.query.subcategory) where.subcategory = String(req.query.subcategory);
+  if (req.query.brand) where.brand = String(req.query.brand);
   const gender = parseGender(req.query.gender);
   if (gender) where.gender = Array.isArray(gender) ? { in: gender } : gender;
   const productType = parseProductType(req.query.productType);
   if (productType) where.productType = productType;
 
   if (req.query.minPrice || req.query.maxPrice) {
-    const price: Record<string, number> = {};
+    const price: Prisma.DecimalFilter = {};
     if (req.query.minPrice) price.gte = Number(req.query.minPrice);
     if (req.query.maxPrice) price.lte = Number(req.query.maxPrice);
     where.price = price;
@@ -62,6 +62,7 @@ router.get("/", async (req: Request, res: Response) => {
     where.OR = [
       { name: { contains: term, mode: "insensitive" } },
       { description: { contains: term, mode: "insensitive" } },
+      { brand: { contains: term, mode: "insensitive" } },
     ];
   }
 
