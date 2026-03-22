@@ -25,6 +25,9 @@ const envSchema = z.object({
   APNS_BUNDLE_ID: z.string().optional(),
   APNS_KEY_PATH: z.string().optional(),
 
+  /** Full `TeamID.bundleIdentifier` for Universal Links (AASA). Overrides APNS_TEAM_ID + APNS_BUNDLE_ID when set. */
+  APPLE_UNIVERSAL_LINK_APP_ID: z.string().optional(),
+
   R2_PUBLIC_URL: z.string().url().optional(),
 });
 
@@ -52,4 +55,15 @@ export function env(): Env {
     throw new Error("env() called before validateEnv() — call validateEnv() at startup");
   }
   return _env;
+}
+
+/** `TeamID.bundleId` for apple-app-site-association, or null if Universal Links are not configured. */
+export function getAppleUniversalLinkAppId(): string | null {
+  const e = env();
+  const explicit = e.APPLE_UNIVERSAL_LINK_APP_ID?.trim();
+  if (explicit) return explicit;
+  if (e.APNS_TEAM_ID && e.APNS_BUNDLE_ID) {
+    return `${e.APNS_TEAM_ID}.${e.APNS_BUNDLE_ID}`;
+  }
+  return null;
 }

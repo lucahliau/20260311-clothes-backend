@@ -8,6 +8,7 @@ import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
 import { sendPasswordResetEmail } from "../lib/email.js";
+import { env } from "../lib/env.js";
 import { AppError } from "../middleware/error.js";
 
 const router = Router();
@@ -285,7 +286,8 @@ router.post("/forgot-password", authLimiter, async (req: Request, res: Response)
       },
     });
 
-    const resetUrl = `${process.env.APP_URL}/reset-password?token=${raw}`;
+    const baseUrl = env().APP_URL.replace(/\/$/, "");
+    const resetUrl = `${baseUrl}/reset-password?token=${raw}`;
     await sendPasswordResetEmail(user.email, resetUrl);
   }
 

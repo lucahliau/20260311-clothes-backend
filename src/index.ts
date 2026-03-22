@@ -6,7 +6,8 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-import { validateEnv, env } from "./lib/env.js";
+import { validateEnv, env, getAppleUniversalLinkAppId } from "./lib/env.js";
+import { buildAppleAppSiteAssociation } from "./lib/appleAppSiteAssociation.js";
 validateEnv();
 
 import { prisma } from "./lib/prisma.js";
@@ -46,6 +47,34 @@ app.get("/health", async (_req, res) => {
   } catch {
     res.status(503).json({ status: "error", db: "disconnected", timestamp: new Date().toISOString() });
   }
+});
+
+app.get("/.well-known/apple-app-site-association", (_req, res) => {
+  const appId = getAppleUniversalLinkAppId();
+  if (!appId) {
+    res.status(404).send("Not found");
+    return;
+  }
+  res.type("application/json").json(buildAppleAppSiteAssociation(appId));
+});
+
+app.get("/reset-password", (req, res) => {
+  const hasToken = typeof req.query.token === "string" && req.query.token.length > 0;
+  const bodyText = hasToken
+    ? "Continue in the Clothes app to choose a new password. If this page opened in Safari, use the same link on the device where the app is installed."
+    : "Open the password reset link from your email on your phone to continue in the app.";
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Password reset</title>
+</head>
+<body>
+  <p>${bodyText}</p>
+</body>
+</html>`;
+  res.type("html").send(html);
 });
 
 app.use("/auth", authRouter);
