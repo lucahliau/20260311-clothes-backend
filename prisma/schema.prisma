@@ -41,6 +41,8 @@ model User {
   friendRequestsReceived FriendRequest[] @relation("FriendRequestTo")
   blocksInitiated        UserBlock[]    @relation("UserBlocks")
   blocksReceived         UserBlock[]    @relation("UserBlockedBy")
+  conversationParticipants ConversationParticipant[]
+  sentMessages           Message[]
 }
 
 enum FollowStatus {
@@ -102,6 +104,43 @@ model UserBlock {
   @@index([blockerId])
 }
 
+model Conversation {
+  id           String                    @id @default(uuid())
+  pairKey      String                    @unique
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  participants ConversationParticipant[]
+  messages     Message[]
+}
+
+model ConversationParticipant {
+  conversationId String
+  userId         String
+  lastReadAt     DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String
+  senderId       String
+  content        String?
+  itemId         String?
+  deletedAt      DateTime?
+  createdAt      DateTime @default(now())
+
+  conversation Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  item         ClothingItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+}
+
 model DeviceToken {
   id        String   @id @default(uuid())
   userId    String
@@ -143,6 +182,7 @@ model ClothingItem {
 
   swipes          Swipe[]
   collectionItems CollectionItem[]
+  messages        Message[]
 
   @@unique([retailer, externalId])
   @@index([category])
