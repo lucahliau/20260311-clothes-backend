@@ -1,9 +1,12 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
+import type { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, optionalAuth } from "../middleware/auth.js";
 import { createAvatarUploadUrl } from "../lib/supabase.js";
 import { AppError } from "../middleware/error.js";
+import { searchLimiter } from "../middleware/rateLimit.js";
+import { isBlockedPair } from "../lib/social.js";
 
 const router = Router();
 
@@ -27,6 +30,7 @@ const updateProfileSchema = z
     favoriteBrands: z.array(z.string()).optional(),
     preferredSizes: z.record(z.string(), z.string()).optional(),
     onboardingCompleted: z.boolean().optional(),
+    profileIsPrivate: z.boolean().optional(),
   })
   .strict();
 
@@ -45,6 +49,75 @@ const deviceTokenSchema = z.object({
 const avatarUploadSchema = z.object({
   fileExt: z.enum(["jpg", "jpeg", "png", "webp", "heic"]).default("jpg"),
 });
+
+const usernameParamSchema = z
+  .string()
+  .min(3)
+  .max(30)
+  .regex(/^[a-zA-Z0-9_]+$/, "Invalid username");
+
+const searchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(60),
+  limit: z.coerce.number().int().min(1).max(30).default(20),
+});
+
+function buildUserSearchWhere(q: string): Prisma.UserWhereInput {
+  const terms = q.trim().split(/\s+/).filter(Boolean);
+  const orParts: Prisma.UserWhereInput[] = [
+    { username: { contains: q, mode: "insensitive" } },
+    { firstName: { contains: q, mode: "insensitive" } },
+    { lastName: { contains: q, mode: "insensitive" } },
+  ];
+  if (terms.length >= 2) {
+    orParts.push({
+      AND: [
+        { firstName: { contains: terms[0], mode: "insensitive" } },
+        { lastName: { contains: terms[terms.length - 1]!, mode: "insensitive" } },
+      ],
+    });
+  }
+  return { OR: orParts };
+}
+
+async function buildRelationship(viewerId: string | undefined, targetId: string) {
+  if (!viewerId || viewerId === targetId) {
+    return null;
+  }
+
+  const [followOut, followIn, friendRow] = await Promise.all([
+    prisma.follow.findUnique({
+      where: { followerId_followeeId: { followerId: viewerId, followeeId: targetId } },
+    }),
+    prisma.follow.findUnique({
+      where: { followerId_followeeId: { followerId: targetId, followeeId: viewerId } },
+    }),
+    prisma.friendRequest.findFirst({
+      where: {
+        OR: [
+          { fromUserId: viewerId, toUserId: targetId },
+          { fromUserId: targetId, toUserId: viewerId },
+        ],
+      },
+    }),
+  ]);
+
+  const mapFollow = (row: { status: string } | null) =>
+    !row ? "none" : row.status === "ACCEPTED" ? "accepted" : row.status === "PENDING" ? "pending" : "none";
+
+  let friendship: "none" | "pending_out" | "pending_in" | "friends" = "none";
+  if (friendRow) {
+    if (friendRow.status === "ACCEPTED") friendship = "friends";
+    else if (friendRow.status === "PENDING") {
+      friendship = friendRow.fromUserId === viewerId ? "pending_out" : "pending_in";
+    }
+  }
+
+  return {
+    followAsViewer: mapFollow(followOut),
+    followFromTarget: mapFollow(followIn),
+    friendship,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // GET /users/me
@@ -179,6 +252,120 @@ router.delete("/me/device-tokens/:token", requireAuth, async (req: Request, res:
   await prisma.deviceToken.delete({ where: { id: existing.id } });
 
   res.json({ message: "Device token removed" });
+});
+
+// ---------------------------------------------------------------------------
+// GET /users/search
+// ---------------------------------------------------------------------------
+
+router.get("/search", searchLimiter, optionalAuth, async (req: Request, res: Response) => {
+  const { q, limit } = searchQuerySchema.parse(req.query);
+  const viewerId = req.user?.userId;
+
+  const baseWhere: Prisma.UserWhereInput = {
+    AND: [
+      buildUserSearchWhere(q),
+      ...(viewerId ? [{ id: { not: viewerId } }] : []),
+      ...(viewerId
+        ? [
+            {
+              NOT: {
+                OR: [
+                  { blocksInitiated: { some: { blockedId: viewerId } } },
+                  { blocksReceived: { some: { blockerId: viewerId } } },
+                ],
+              },
+            },
+          ]
+        : []),
+    ],
+  };
+
+  const rows = await prisma.user.findMany({
+    where: baseWhere,
+    take: limit,
+    orderBy: { username: "asc" },
+    select: {
+      id: true,
+      username: true,
+      firstName: true,
+      lastName: true,
+      avatarUrl: true,
+      profileIsPrivate: true,
+    },
+  });
+
+  res.json({ items: rows });
+});
+
+// ---------------------------------------------------------------------------
+// GET /users/:username — public profile (optional auth for relationship)
+// ---------------------------------------------------------------------------
+
+router.get("/:username", optionalAuth, async (req: Request, res: Response) => {
+  const username = usernameParamSchema.parse(req.params.username);
+  const viewerId = req.user?.userId;
+
+  const target = await prisma.user.findUnique({
+    where: { username },
+    omit: PRIVATE_FIELDS,
+  });
+
+  if (!target) {
+    throw new AppError(404, "NOT_FOUND", "User not found");
+  }
+
+  if (viewerId && (await isBlockedPair(viewerId, target.id))) {
+    throw new AppError(404, "NOT_FOUND", "User not found");
+  }
+
+  const [followerCount, followingCount, relationship] = await Promise.all([
+    prisma.follow.count({ where: { followeeId: target.id, status: "ACCEPTED" } }),
+    prisma.follow.count({ where: { followerId: target.id, status: "ACCEPTED" } }),
+    buildRelationship(viewerId, target.id),
+  ]);
+
+  const isSelf = viewerId === target.id;
+  const followAccepted =
+    relationship?.followAsViewer === "accepted" || relationship?.followFromTarget === "accepted";
+  const isFriend = relationship?.friendship === "friends";
+
+  const canSeeFull =
+    isSelf || !target.profileIsPrivate || followAccepted || isFriend;
+
+  const full = {
+    id: target.id,
+    username: target.username,
+    firstName: target.firstName,
+    lastName: target.lastName,
+    avatarUrl: target.avatarUrl,
+    bio: target.bio,
+    location: target.location,
+    gender: target.gender,
+    stylePreferences: target.stylePreferences,
+    favoriteBrands: target.favoriteBrands,
+    profileIsPrivate: target.profileIsPrivate,
+    onboardingCompleted: target.onboardingCompleted,
+    createdAt: target.createdAt,
+    followerCount,
+    followingCount,
+    relationship: isSelf ? null : relationship,
+  };
+
+  if (canSeeFull) {
+    res.json(full);
+    return;
+  }
+
+  res.json({
+    id: target.id,
+    username: target.username,
+    avatarUrl: target.avatarUrl,
+    profileIsPrivate: true,
+    followerCount,
+    followingCount,
+    relationship,
+  });
 });
 
 export default router;

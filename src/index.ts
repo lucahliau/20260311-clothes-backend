@@ -18,6 +18,7 @@ import itemsRouter from "./routes/items.js";
 import brandsRouter from "./routes/brands.js";
 import swipesRouter from "./routes/swipes.js";
 import collectionsRouter from "./routes/collections.js";
+import socialRouter from "./routes/social.js";
 
 const app = express();
 
@@ -52,6 +53,7 @@ app.use("/items", itemsRouter);
 app.use("/brands", brandsRouter);
 app.use("/swipes", swipesRouter);
 app.use("/collections", collectionsRouter);
+app.use("/social", socialRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: { code: "NOT_FOUND", message: "Route not found" } });

@@ -13,6 +13,7 @@ model User {
   username             String    @unique
   passwordHash         String?
   appleId              String?   @unique
+  googleId             String?   @unique
   firstName            String?
   lastName             String?
   avatarUrl            String?
@@ -24,15 +25,81 @@ model User {
   favoriteBrands       String[]
   preferredSizes       Json?
   onboardingCompleted  Boolean   @default(false)
+  profileIsPrivate     Boolean   @default(false)
   refreshTokenHash     String?
   resetTokenHash       String?
   resetTokenExpiry     DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  swipes       Swipe[]
-  collections  Collection[]
-  deviceTokens DeviceToken[]
+  swipes                 Swipe[]
+  collections            Collection[]
+  deviceTokens           DeviceToken[]
+  following              Follow[]       @relation("UserFollowing")
+  followers              Follow[]       @relation("UserFollowers")
+  friendRequestsSent     FriendRequest[] @relation("FriendRequestFrom")
+  friendRequestsReceived FriendRequest[] @relation("FriendRequestTo")
+  blocksInitiated        UserBlock[]    @relation("UserBlocks")
+  blocksReceived         UserBlock[]    @relation("UserBlockedBy")
+}
+
+enum FollowStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model Follow {
+  id          String       @id @default(uuid())
+  followerId  String
+  followeeId  String
+  status      FollowStatus
+  createdAt   DateTime     @default(now())
+  respondedAt DateTime?
+
+  follower User @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  followee User @relation("UserFollowers", fields: [followeeId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followeeId])
+  @@index([followeeId])
+  @@index([followerId])
+}
+
+enum FriendRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+model FriendRequest {
+  id         String               @id @default(uuid())
+  fromUserId String
+  toUserId   String
+  status     FriendRequestStatus
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  fromUser User @relation("FriendRequestFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser   User @relation("FriendRequestTo", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@unique([fromUserId, toUserId])
+  @@index([toUserId])
+  @@index([fromUserId])
+}
+
+model UserBlock {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("UserBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("UserBlockedBy", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+  @@index([blockerId])
 }
 
 model DeviceToken {

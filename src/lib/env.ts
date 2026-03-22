@@ -11,7 +11,11 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   APP_URL: z.string().url().default("http://localhost:3000"),
 
+  /** Must match the iOS bundle ID or Sign in with Apple Services ID string (the token `aud` claim). */
   APPLE_CLIENT_ID: z.string().optional(),
+
+  /** OAuth client ID whose ID tokens the app sends; must match the token `aud` (often the iOS client ID). */
+  GOOGLE_CLIENT_ID: z.string().optional(),
 
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_SERVICE_KEY: z.string().optional(),

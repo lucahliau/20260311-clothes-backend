@@ -32,3 +32,20 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
     res.status(401).json({ error: "Invalid or expired token" });
   }
 }
+
+/** Sets `req.user` when a valid Bearer token is present; otherwise continues without auth. */
+export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) {
+    next();
+    return;
+  }
+  const token = header.slice(7);
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload;
+    req.user = payload;
+  } catch {
+    // no user
+  }
+  next();
+}

@@ -18,6 +18,8 @@ const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const RESET_TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
 const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
 const APPLE_ISSUER = "https://appleid.apple.com";
+const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
+const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"] as const;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,6 +88,14 @@ function getAppleJwks() {
   return _appleJwks;
 }
 
+let _googleJwks: ReturnType<typeof jose.createRemoteJWKSet> | null = null;
+function getGoogleJwks() {
+  if (!_googleJwks) {
+    _googleJwks = jose.createRemoteJWKSet(new URL(GOOGLE_JWKS_URL));
+  }
+  return _googleJwks;
+}
+
 // ---------------------------------------------------------------------------
 // Validation schemas
 // ---------------------------------------------------------------------------
@@ -113,6 +123,10 @@ const appleAuthSchema = z.object({
       familyName: z.string().optional(),
     })
     .optional(),
+});
+
+const googleAuthSchema = z.object({
+  idToken: z.string(),
 });
 
 const changePasswordSchema = z.object({
@@ -315,6 +329,9 @@ router.post("/reset-password", async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // POST /auth/apple
 // ---------------------------------------------------------------------------
+// iOS: ASAuthorizationAppleIDCredential.identityToken (JWT string). Body:
+// { "identityToken": "<jwt>", "fullName": { "givenName"?, "familyName"? } } (fullName only on first sign-in).
+// APPLE_CLIENT_ID must match the token audience (your App ID / bundle ID, or Services ID for web).
 
 router.post("/apple", authLimiter, async (req: Request, res: Response) => {
   const { identityToken, fullName } = appleAuthSchema.parse(req.body);
@@ -365,6 +382,85 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
         appleId,
         firstName: fullName?.givenName ?? null,
         lastName: fullName?.familyName ?? null,
+      },
+    });
+  }
+
+  const refresh = generateRefreshToken();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { refreshTokenHash: refresh.hash },
+  });
+
+  const accessToken = generateAccessToken(user.id, user.email);
+
+  res.json({
+    user: toAuthUser(user),
+    accessToken,
+    refreshToken: refresh.raw,
+    isNewUser: !user.onboardingCompleted,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /auth/google
+// ---------------------------------------------------------------------------
+// iOS: GIDSignIn idToken.tokenString. Body: { "idToken": "<jwt>" }.
+// GOOGLE_CLIENT_ID must match the ID token aud (typically your iOS OAuth client ID from Google Cloud).
+
+router.post("/google", authLimiter, async (req: Request, res: Response) => {
+  const { idToken } = googleAuthSchema.parse(req.body);
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    throw new AppError(503, "SERVICE_UNAVAILABLE", "Google Sign-In is not configured");
+  }
+
+  let googlePayload: jose.JWTPayload;
+  try {
+    const { payload } = await jose.jwtVerify(idToken, getGoogleJwks(), {
+      issuer: [...GOOGLE_ISSUERS],
+      audience: clientId,
+    });
+    googlePayload = payload;
+  } catch {
+    throw new AppError(401, "UNAUTHORIZED", "Invalid Google ID token");
+  }
+
+  const googleId = googlePayload.sub;
+  const googleEmail = googlePayload.email as string | undefined;
+  const emailVerified =
+    googlePayload.email_verified === true || googlePayload.email_verified === "true";
+
+  if (!googleId) {
+    throw new AppError(401, "UNAUTHORIZED", "Invalid Google ID token: missing subject");
+  }
+
+  let user = await prisma.user.findUnique({ where: { googleId } });
+
+  if (!user && googleEmail && emailVerified) {
+    user = await prisma.user.findUnique({ where: { email: googleEmail } });
+    if (user) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { googleId },
+      });
+    }
+  }
+
+  if (!user) {
+    const email = googleEmail || `google_${googleId}@placeholder.invalid`;
+    const username = `user_${crypto.randomBytes(6).toString("hex")}`;
+    const givenName = googlePayload.given_name as string | undefined;
+    const familyName = googlePayload.family_name as string | undefined;
+
+    user = await prisma.user.create({
+      data: {
+        email,
+        username,
+        googleId,
+        firstName: givenName ?? null,
+        lastName: familyName ?? null,
       },
     });
   }
