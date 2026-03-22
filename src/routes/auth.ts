@@ -10,6 +10,7 @@ import { authLimiter } from "../middleware/rateLimit.js";
 import { sendPasswordResetEmail } from "../lib/email.js";
 import { env } from "../lib/env.js";
 import { AppError } from "../middleware/error.js";
+import { loginBodySchema } from "../lib/loginBody.js";
 
 const router = Router();
 
@@ -111,11 +112,6 @@ const registerSchema = z.object({
   password: z.string().min(8).max(128),
 });
 
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string(),
-});
-
 const appleAuthSchema = z.object({
   identityToken: z.string(),
   fullName: z
@@ -187,8 +183,16 @@ router.post("/register", authLimiter, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.post("/login", authLimiter, async (req: Request, res: Response) => {
-  const body = req.body ?? {};
-  const { email, password } = loginSchema.parse(body);
+  const raw = req.body ?? {};
+  const parsed = loginBodySchema.safeParse(raw);
+  if (!parsed.success) {
+    const empty = Object.keys(raw as Record<string, unknown>).length === 0;
+    const message = empty
+      ? "Request body is empty or could not be parsed. Send Content-Type: application/json with {\"email\":\"...\",\"password\":\"...\"}, or application/x-www-form-urlencoded with the same fields."
+      : "Validation failed";
+    throw new AppError(400, "VALIDATION_ERROR", message, parsed.error.flatten().fieldErrors);
+  }
+  const { email, password } = parsed.data;
 
   const user = await prisma.user.findUnique({ where: { email } });
 
