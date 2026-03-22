@@ -99,6 +99,7 @@ function resetPasswordFallbackHtml(opts: { email: string; token: string } | { re
     const form = document.getElementById('f');
     const msg = document.getElementById('msg');
     const btn = document.getElementById('btn');
+    const LOG = '[password-reset]';
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const p1 = document.getElementById('p1').value;
@@ -106,33 +107,64 @@ function resetPasswordFallbackHtml(opts: { email: string; token: string } | { re
       msg.textContent = '';
       msg.className = '';
       if (p1 !== p2) {
+        console.warn(LOG, 'client validation failed', { reason: 'password_mismatch' });
         msg.textContent = 'Passwords do not match.';
         msg.className = 'error';
         return;
       }
       if (p1.length < 8) {
+        console.warn(LOG, 'client validation failed', { reason: 'password_too_short', length: p1.length });
         msg.textContent = 'Password must be at least 8 characters.';
         msg.className = 'error';
         return;
       }
       btn.disabled = true;
+      const endpoint = '/auth/reset-password';
       try {
-        const res = await fetch('/auth/reset-password', {
+        const res = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: TOKEN, password: p1 }),
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          const m = data.error && data.error.message ? data.error.message : 'Something went wrong.';
-          msg.textContent = m;
+        const text = await res.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (parseErr) {
+          console.error(LOG, 'response body is not JSON', {
+            status: res.status,
+            statusText: res.statusText,
+            contentType: res.headers.get('content-type'),
+            bodyPreview: text.slice(0, 400),
+          });
+          msg.textContent = 'Unexpected server response. Try again or request a new reset link.';
           msg.className = 'error';
           return;
         }
+        if (!res.ok) {
+          const apiMsg = data.error && data.error.message ? data.error.message : 'Something went wrong.';
+          const apiCode = data.error && data.error.code ? data.error.code : undefined;
+          const details = data.error && data.error.details ? data.error.details : undefined;
+          console.error(LOG, 'POST failed', {
+            status: res.status,
+            statusText: res.statusText,
+            endpoint,
+            code: apiCode,
+            message: apiMsg,
+            details,
+          });
+          msg.textContent = apiMsg;
+          msg.className = 'error';
+          return;
+        }
+        console.info(LOG, 'password updated successfully', { endpoint, status: res.status });
         msg.textContent = 'Password updated. You can close this page and sign in with your new password.';
         msg.className = 'ok';
         form.reset();
-      } catch {
+      } catch (err) {
+        const name = err && err.name ? err.name : 'Error';
+        const message = err && err.message ? err.message : String(err);
+        console.error(LOG, 'fetch failed', { endpoint, name, message });
         msg.textContent = 'Network error. Try again.';
         msg.className = 'error';
       } finally {
@@ -182,9 +214,11 @@ app.get("/.well-known/apple-app-site-association", (_req, res) => {
 });
 
 app.get("/reset-password", async (req, res, next) => {
+  const logPrefix = "[password-reset] GET /reset-password";
   try {
     const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
     if (!token) {
+      console.warn(`${logPrefix}: missing or empty token query`);
       res.type("html").send(resetPasswordFallbackHtml({ reason: "no-token" }));
       return;
     }
@@ -199,12 +233,17 @@ app.get("/reset-password", async (req, res, next) => {
     });
 
     if (!user) {
+      console.warn(`${logPrefix}: no matching user or token expired (hash prefix ${hash.slice(0, 8)}…)`);
       res.type("html").send(resetPasswordFallbackHtml({ reason: "invalid" }));
       return;
     }
 
+    if (env().NODE_ENV !== "production") {
+      console.debug(`${logPrefix}: serving reset form`, { email: user.email });
+    }
     res.type("html").send(resetPasswordFallbackHtml({ email: user.email, token }));
   } catch (err) {
+    console.error(`${logPrefix}: unexpected error`, err);
     next(err);
   }
 });

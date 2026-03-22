@@ -321,6 +321,9 @@ router.post("/reset-password", async (req: Request, res: Response) => {
   });
 
   if (!user) {
+    console.warn("[auth] POST /auth/reset-password: invalid or expired token", {
+      tokenHashPrefix: hash.slice(0, 8),
+    });
     throw new AppError(400, "BAD_REQUEST", "Invalid or expired reset token");
   }
 
@@ -336,6 +339,9 @@ router.post("/reset-password", async (req: Request, res: Response) => {
     },
   });
 
+  if (env().NODE_ENV !== "production") {
+    console.debug("[auth] POST /auth/reset-password: success", { userId: user.id });
+  }
   res.json({ message: "Password has been reset. Please log in again." });
 });
 
