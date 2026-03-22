@@ -94,5 +94,8 @@ app.use(errorHandler);
 
 const PORT = env().PORT;
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  const e = env();
+  console.log(
+    `Server listening on port ${PORT} | APP_URL=${e.APP_URL} (use this origin for clients and password-reset links)`
+  );
 });
