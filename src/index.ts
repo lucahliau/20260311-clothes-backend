@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import dotenv from "dotenv";
+import crypto from "crypto";
 
 dotenv.config();
 
@@ -21,6 +22,127 @@ import swipesRouter from "./routes/swipes.js";
 import collectionsRouter from "./routes/collections.js";
 import socialRouter from "./routes/social.js";
 import messagesRouter from "./routes/messages.js";
+
+function hashResetToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** HTML fallback when the reset email link opens in a browser instead of the app. */
+function resetPasswordFallbackHtml(opts: { email: string; token: string } | { reason: "no-token" | "invalid" }) {
+  if ("reason" in opts) {
+    const msg =
+      opts.reason === "no-token"
+        ? "Open the password reset link from your email. If you lost the link, request a new one from the app."
+        : "This reset link is invalid or has expired. Please request a new password reset from the app.";
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Password reset</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 28rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1a1a1a; }
+    p { margin: 0; }
+  </style>
+</head>
+<body>
+  <p>${msg}</p>
+</body>
+</html>`;
+  }
+
+  const email = escapeHtml(opts.email);
+  const tokenJson = JSON.stringify(opts.token);
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set a new password</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 22rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1a1a1a; }
+    label { display: block; font-size: 0.875rem; font-weight: 600; margin-bottom: 0.35rem; }
+    input { width: 100%; padding: 0.5rem 0.65rem; border: 1px solid #ccc; border-radius: 6px; font-size: 1rem; margin-bottom: 1rem; }
+    button { width: 100%; padding: 0.6rem; font-size: 1rem; font-weight: 600; border: none; border-radius: 6px; background: #111; color: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .email { margin-bottom: 1.25rem; padding: 0.65rem 0.75rem; background: #f4f4f5; border-radius: 6px; font-size: 0.95rem; word-break: break-all; }
+    .hint { font-size: 0.8rem; color: #555; margin-top: -0.5rem; margin-bottom: 1rem; }
+    #msg { margin-top: 1rem; font-size: 0.9rem; }
+    #msg.error { color: #b91c1c; }
+    #msg.ok { color: #15803d; }
+  </style>
+</head>
+<body>
+  <h1 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Reset password</h1>
+  <p class="hint">Account</p>
+  <div class="email">${email}</div>
+  <form id="f" novalidate>
+    <label for="p1">New password</label>
+    <input id="p1" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required>
+    <label for="p2">Confirm password</label>
+    <input id="p2" type="password" autocomplete="new-password" minlength="8" maxlength="128" required>
+    <button type="submit" id="btn">Update password</button>
+  </form>
+  <p id="msg" role="status"></p>
+  <script>
+    const TOKEN = ${tokenJson};
+    const form = document.getElementById('f');
+    const msg = document.getElementById('msg');
+    const btn = document.getElementById('btn');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const p1 = document.getElementById('p1').value;
+      const p2 = document.getElementById('p2').value;
+      msg.textContent = '';
+      msg.className = '';
+      if (p1 !== p2) {
+        msg.textContent = 'Passwords do not match.';
+        msg.className = 'error';
+        return;
+      }
+      if (p1.length < 8) {
+        msg.textContent = 'Password must be at least 8 characters.';
+        msg.className = 'error';
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const res = await fetch('/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: TOKEN, password: p1 }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const m = data.error && data.error.message ? data.error.message : 'Something went wrong.';
+          msg.textContent = m;
+          msg.className = 'error';
+          return;
+        }
+        msg.textContent = 'Password updated. You can close this page and sign in with your new password.';
+        msg.className = 'ok';
+        form.reset();
+      } catch {
+        msg.textContent = 'Network error. Try again.';
+        msg.className = 'error';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>`;
+}
 
 const app = express();
 
@@ -58,23 +180,32 @@ app.get("/.well-known/apple-app-site-association", (_req, res) => {
   res.type("application/json").json(buildAppleAppSiteAssociation(appId));
 });
 
-app.get("/reset-password", (req, res) => {
-  const hasToken = typeof req.query.token === "string" && req.query.token.length > 0;
-  const bodyText = hasToken
-    ? "Continue in the Clothes app to choose a new password. If this page opened in Safari, use the same link on the device where the app is installed."
-    : "Open the password reset link from your email on your phone to continue in the app.";
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Password reset</title>
-</head>
-<body>
-  <p>${bodyText}</p>
-</body>
-</html>`;
-  res.type("html").send(html);
+app.get("/reset-password", async (req, res, next) => {
+  try {
+    const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+    if (!token) {
+      res.type("html").send(resetPasswordFallbackHtml({ reason: "no-token" }));
+      return;
+    }
+
+    const hash = hashResetToken(token);
+    const user = await prisma.user.findFirst({
+      where: {
+        resetTokenHash: hash,
+        resetTokenExpiry: { gt: new Date() },
+      },
+      select: { email: true },
+    });
+
+    if (!user) {
+      res.type("html").send(resetPasswordFallbackHtml({ reason: "invalid" }));
+      return;
+    }
+
+    res.type("html").send(resetPasswordFallbackHtml({ email: user.email, token }));
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.use("/auth", authRouter);
