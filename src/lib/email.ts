@@ -1,23 +1,26 @@
 import { Resend } from "resend";
-
-const FROM_ADDRESS = "noreply@yourdomain.com"; // Update once domain is verified in Resend
+import { env } from "./env.js";
+import { AppError } from "../middleware/error.js";
 
 let _resend: Resend | null = null;
 
 function getResendClient(): Resend {
   if (!_resend) {
-    if (!process.env.RESEND_API_KEY || process.env.RESEND_API_KEY === "re_CHANGE_ME") {
+    const key = env().RESEND_API_KEY;
+    if (!key || key === "re_CHANGE_ME") {
       throw new Error("RESEND_API_KEY is not configured — cannot send emails");
     }
-    _resend = new Resend(process.env.RESEND_API_KEY);
+    _resend = new Resend(key);
   }
   return _resend;
 }
 
 export async function sendPasswordResetEmail(to: string, resetUrl: string) {
   const resend = getResendClient();
-  await resend.emails.send({
-    from: FROM_ADDRESS,
+  const from = env().RESEND_FROM_EMAIL;
+
+  const result = await resend.emails.send({
+    from,
     to,
     subject: "Reset your password",
     html: `
@@ -27,4 +30,9 @@ export async function sendPasswordResetEmail(to: string, resetUrl: string) {
       <p>This link expires in 1 hour. If you didn't request this, you can safely ignore this email.</p>
     `,
   });
+
+  if (result.error) {
+    console.error("[Resend] email send failed:", result.error.name, result.error.message);
+    throw new AppError(503, "EMAIL_SEND_FAILED", "Could not send password reset email");
+  }
 }

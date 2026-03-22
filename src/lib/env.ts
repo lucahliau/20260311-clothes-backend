@@ -9,6 +9,8 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(16),
 
   RESEND_API_KEY: z.string().optional(),
+  /** Sender for transactional email; must be allowed in Resend (e.g. onboarding@resend.dev or your verified domain). */
+  RESEND_FROM_EMAIL: z.string().email().default("onboarding@resend.dev"),
   APP_URL: z.string().url().default("http://localhost:3000"),
 
   /** Must match the iOS bundle ID or Sign in with Apple Services ID string (the token `aud` claim). */

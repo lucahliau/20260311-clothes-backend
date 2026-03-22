@@ -274,7 +274,11 @@ router.post("/forgot-password", authLimiter, async (req: Request, res: Response)
   // Always return 200 to avoid leaking whether the email exists
   const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
 
-  if (user) {
+  if (!user) {
+    if (env().NODE_ENV !== "production") {
+      console.debug("[auth] forgot-password: no matching user");
+    }
+  } else {
     const raw = crypto.randomBytes(32).toString("hex");
     const hash = hashToken(raw);
 
@@ -289,6 +293,9 @@ router.post("/forgot-password", authLimiter, async (req: Request, res: Response)
     const baseUrl = env().APP_URL.replace(/\/$/, "");
     const resetUrl = `${baseUrl}/reset-password?token=${raw}`;
     await sendPasswordResetEmail(user.email, resetUrl);
+    if (env().NODE_ENV !== "production") {
+      console.debug("[auth] forgot-password: reset email sent via Resend");
+    }
   }
 
   res.json({ message: "If that email is registered, a reset link has been sent" });

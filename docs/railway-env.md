@@ -12,6 +12,9 @@ Set these on the Railway service (Variables). Redeploy after changes if the plat
 | `JWT_SECRET` | (long random string) | |
 | `JWT_REFRESH_SECRET` | (long random string) | |
 | `RESEND_API_KEY` | `re_...` | Required for sending email. |
+| `RESEND_FROM_EMAIL` | `onboarding@resend.dev` or `Name <noreply@yourdomain.com>` | Defaults to `onboarding@resend.dev` (Resend test sender). For production, use an address on a **verified domain** in the Resend dashboard. |
+
+If Resend rejects the send (invalid `from`, unverified domain, etc.), `POST /auth/forgot-password` returns **503** with `EMAIL_SEND_FAILED` instead of a silent 200.
 
 ## Universal Links (AASA)
 
