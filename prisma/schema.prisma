@@ -183,6 +183,7 @@ model ClothingItem {
   swipes          Swipe[]
   collectionItems CollectionItem[]
   messages        Message[]
+  embeddings      ItemEmbedding[]
 
   @@unique([retailer, externalId])
   @@index([category])
@@ -252,4 +253,20 @@ model ScrapedRaw {
 
   @@index([retailer])
   @@index([processed])
+}
+
+/// Per-item embedding vectors (pgvector). `vector` column is vector(512) in DB for CLIP ViT-B-32 image embeddings.
+model ItemEmbedding {
+  id         String   @id @default(uuid())
+  itemId     String
+  model      String
+  dim        Int
+  vector     Unsupported("vector(512)")
+  embeddedAt DateTime @default(now())
+
+  item ClothingItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, model])
+  @@index([model])
+  @@index([itemId])
 }

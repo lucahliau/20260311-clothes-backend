@@ -3,6 +3,7 @@ import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
+import { buildPersonalizedFeed, type FeedFilters } from "../services/feed-personalization.js";
 
 const router = Router();
 
@@ -96,13 +97,35 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || FEED_DEFAULT_LIMIT));
   const userId = req.user!.userId;
 
+  const filters: FeedFilters = {};
+  if (typeof req.query.category === "string" && req.query.category.trim()) {
+    filters.category = req.query.category.trim();
+  }
+  const gender = parseGender(req.query.gender);
+  if (gender) filters.gender = gender;
+  const productType = parseProductType(req.query.productType);
+  if (productType) filters.productType = productType;
+
+  // Try the personalized path; fall back to a preference-agnostic random feed
+  // if anything in the embedding pipeline fails (missing pgvector index, DB
+  // error, etc.) so /items/feed never goes empty for an avoidable reason.
+  try {
+    const items = await buildPersonalizedFeed({ userId, limit, filters });
+    if (items.length > 0) {
+      res.json({ items, remaining: items.length });
+      return;
+    }
+  } catch (err) {
+    console.error("buildPersonalizedFeed failed, falling back to random feed", err);
+  }
+
+  // Fallback: original random feed (no embeddings required).
   const swipedItemIds = await prisma.swipe.findMany({
     where: { userId },
     select: { itemId: true },
     orderBy: { createdAt: "desc" },
     take: MAX_EXCLUDE_IDS,
   });
-
   const excludeIds = swipedItemIds
     .map((s) => s.itemId)
     .filter((id) => UUID_REGEX.test(id));
@@ -114,21 +137,15 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   if (excludeIds.length > 0) {
     sqlWhere.push(Prisma.sql`id NOT IN (${Prisma.join(excludeIds)})`);
   }
-  if (typeof req.query.category === "string" && req.query.category.trim()) {
-    sqlWhere.push(Prisma.sql`category = ${req.query.category.trim()}`);
-  }
-  const gender = parseGender(req.query.gender);
-  if (gender) {
-    if (Array.isArray(gender)) {
-      sqlWhere.push(Prisma.sql`gender IN (${Prisma.join(gender)})`);
+  if (filters.category) sqlWhere.push(Prisma.sql`category = ${filters.category}`);
+  if (filters.gender) {
+    if (Array.isArray(filters.gender)) {
+      sqlWhere.push(Prisma.sql`gender IN (${Prisma.join(filters.gender)})`);
     } else {
-      sqlWhere.push(Prisma.sql`gender = ${gender}`);
+      sqlWhere.push(Prisma.sql`gender = ${filters.gender}`);
     }
   }
-  const productType = parseProductType(req.query.productType);
-  if (productType) {
-    sqlWhere.push(Prisma.sql`"productType" = ${productType}`);
-  }
+  if (filters.productType) sqlWhere.push(Prisma.sql`"productType" = ${filters.productType}`);
 
   const idRows = await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "ClothingItem"

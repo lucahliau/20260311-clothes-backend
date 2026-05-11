@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
+import { invalidateUserClusters } from "../services/feed-personalization.js";
 
 const router = Router();
 
@@ -44,6 +45,7 @@ router.post("/", requireAuth, async (req: Request, res: Response) => {
     include: { item: true },
   });
 
+  invalidateUserClusters(userId);
   res.status(201).json(swipe);
 });
 
@@ -102,6 +104,7 @@ router.delete("/last", requireAuth, async (req: Request, res: Response) => {
 
   await prisma.swipe.delete({ where: { id: lastSwipe.id } });
 
+  invalidateUserClusters(req.user!.userId);
   res.json({ message: "Last swipe undone", undone: lastSwipe });
 });
 
@@ -131,6 +134,7 @@ router.patch("/:id", requireAuth, async (req: Request, res: Response) => {
     include: { item: true },
   });
 
+  invalidateUserClusters(userId);
   res.json(swipe);
 });
 
