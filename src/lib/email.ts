@@ -40,3 +40,28 @@ export async function sendPasswordResetEmail(to: string, resetUrl: string) {
     throw new AppError(503, "EMAIL_SEND_FAILED", "Could not send password reset email");
   }
 }
+
+export async function sendVerificationEmail(to: string, verifyUrl: string) {
+  const resend = getResendClient();
+  const from = env().RESEND_FROM_EMAIL;
+
+  const result = await resend.emails.send({
+    from,
+    to,
+    subject: "Confirm your email",
+    html: `
+      <h2>Confirm your email</h2>
+      <p>Thanks for signing up! Click the link below to verify your email address and finish creating your account:</p>
+      <p><a href="${verifyUrl}">Verify my email</a></p>
+      <p>This link expires in 24 hours. If you didn't sign up, you can safely ignore this email.</p>
+    `,
+  });
+
+  if (result.error) {
+    logger.error(
+      { resendErrorName: result.error.name, resendErrorMessage: result.error.message },
+      "[Resend] verification email send failed",
+    );
+    throw new AppError(503, "EMAIL_SEND_FAILED", "Could not send verification email");
+  }
+}

@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
+import { swipeLimiter } from "../middleware/rateLimit.js";
 import { AppError } from "../middleware/error.js";
 import { invalidateUserClusters } from "../services/feed-personalization.js";
 
@@ -23,7 +24,7 @@ const updateSwipeSchema = z.object({
 // POST /swipes
 // ---------------------------------------------------------------------------
 
-router.post("/", requireAuth, async (req: Request, res: Response) => {
+router.post("/", requireAuth, swipeLimiter, async (req: Request, res: Response) => {
   const { itemId, action } = swipeSchema.parse(req.body);
   const userId = req.user!.userId;
 

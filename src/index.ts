@@ -39,6 +39,100 @@ function hashResetToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+/** HTML fallback page when the email-verification link opens in a browser. */
+function verifyEmailFallbackHtml(opts: { token: string } | { reason: "no-token" | "invalid" }) {
+  if ("reason" in opts) {
+    const msg =
+      opts.reason === "no-token"
+        ? "Open the verification link from your signup email. If you lost the link, request a new one from the app."
+        : "This verification link is invalid or has expired. Request a new one from the app and try again.";
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Verify email</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 28rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1a1a1a; }
+    p { margin: 0; }
+  </style>
+</head>
+<body>
+  <p>${msg}</p>
+</body>
+</html>`;
+  }
+
+  const tokenJson = JSON.stringify(opts.token);
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Verify email</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 24rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1a1a1a; text-align: center; }
+    h1 { font-size: 1.25rem; margin-bottom: 1rem; }
+    #msg { margin-top: 1rem; font-size: 1rem; }
+    #msg.error { color: #b91c1c; }
+    #msg.ok { color: #15803d; }
+    .spinner { display: inline-block; width: 1.25rem; height: 1.25rem; border: 2px solid #ccc; border-top-color: #111; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h1>Verifying your email</h1>
+  <p id="msg"><span class="spinner"></span> One moment...</p>
+  <script>
+    const TOKEN = ${tokenJson};
+    const msg = document.getElementById('msg');
+    const LOG = '[email-verify]';
+    (async () => {
+      const endpoint = '/auth/verify-email';
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: TOKEN }),
+        });
+        const text = await res.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (parseErr) {
+          console.error(LOG, 'response body is not JSON', {
+            status: res.status,
+            statusText: res.statusText,
+            contentType: res.headers.get('content-type'),
+            bodyPreview: text.slice(0, 400),
+          });
+          msg.textContent = 'Unexpected server response. Try again or request a new link.';
+          msg.className = 'error';
+          return;
+        }
+        if (!res.ok) {
+          const apiMsg = data.error && data.error.message ? data.error.message : 'Something went wrong.';
+          console.error(LOG, 'POST failed', { status: res.status, code: data.error && data.error.code, message: apiMsg });
+          msg.textContent = apiMsg;
+          msg.className = 'error';
+          return;
+        }
+        console.info(LOG, 'email verified', { endpoint, status: res.status });
+        msg.textContent = 'Email verified! You can close this page and log in to the app.';
+        msg.className = 'ok';
+      } catch (err) {
+        const message = err && err.message ? err.message : String(err);
+        console.error(LOG, 'fetch failed', { endpoint, message });
+        msg.textContent = 'Network error. Try again.';
+        msg.className = 'error';
+      }
+    })();
+  </script>
+</body>
+</html>`;
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -307,6 +401,41 @@ app.get("/reset-password", async (req, res, next) => {
     res.type("html").send(resetPasswordFallbackHtml({ email: user.email, token }));
   } catch (err) {
     req.log.error({ err }, "Password reset: unexpected error rendering form");
+    next(err);
+  }
+});
+
+app.get("/verify-email", async (req, res, next) => {
+  try {
+    const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+    if (!token) {
+      req.log.warn("Email verify: missing or empty token query");
+      res.type("html").send(verifyEmailFallbackHtml({ reason: "no-token" }));
+      return;
+    }
+
+    const hash = hashResetToken(token); // sha256 — same helper used for reset tokens
+    const user = await prisma.user.findFirst({
+      where: {
+        emailVerificationTokenHash: hash,
+        emailVerificationExpiry: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+
+    if (!user) {
+      req.log.warn(
+        { hashPrefix: hash.slice(0, 8) },
+        "Email verify: no matching user or token expired",
+      );
+      res.type("html").send(verifyEmailFallbackHtml({ reason: "invalid" }));
+      return;
+    }
+
+    req.log.debug("Email verify: serving auto-submit page");
+    res.type("html").send(verifyEmailFallbackHtml({ token }));
+  } catch (err) {
+    req.log.error({ err }, "Email verify: unexpected error rendering page");
     next(err);
   }
 });

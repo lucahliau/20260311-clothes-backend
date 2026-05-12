@@ -7,10 +7,15 @@ import * as jose from "jose";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
-import { sendPasswordResetEmail } from "../lib/email.js";
+import { sendPasswordResetEmail, sendVerificationEmail } from "../lib/email.js";
 import { env } from "../lib/env.js";
 import { AppError } from "../middleware/error.js";
 import { loginBodySchema } from "../lib/loginBody.js";
+import {
+  isLockedOut,
+  nextStateOnFailure,
+  shouldClearOnSuccess,
+} from "../lib/loginLockout.js";
 import {
   upsertSessionForLogin,
   rotateSession,
@@ -31,6 +36,7 @@ const BCRYPT_ROUNDS = 12;
 // so token theft is still detected promptly via the next refresh attempt.
 const ACCESS_TOKEN_EXPIRY = "1h";
 const RESET_TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+const EMAIL_VERIFICATION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
 const APPLE_ISSUER = "https://appleid.apple.com";
 const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
@@ -170,13 +176,21 @@ const resetPasswordSchema = z.object({
   password: z.string().min(8).max(128),
 });
 
+const verifyEmailSchema = z.object({
+  token: z.string().min(1),
+});
+
+const resendVerificationSchema = z.object({
+  email: z.string().email(),
+});
+
 // ---------------------------------------------------------------------------
 // POST /auth/register
 // ---------------------------------------------------------------------------
 
 router.post("/register", authLimiter, async (req: Request, res: Response) => {
   const body = req.body ?? {};
-  const { email, username, password, deviceId } = registerSchema.parse(body);
+  const { email, username, password } = registerSchema.parse(body);
 
   const existingUser = await prisma.user.findFirst({
     where: { OR: [{ email }, { username }] },
@@ -188,22 +202,30 @@ router.post("/register", authLimiter, async (req: Request, res: Response) => {
   }
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  const rawVerificationToken = crypto.randomBytes(32).toString("hex");
+  const verificationHash = hashToken(rawVerificationToken);
 
   const user = await prisma.user.create({
-    data: { email, username, passwordHash },
+    data: {
+      email,
+      username,
+      passwordHash,
+      emailVerified: false,
+      emailVerificationTokenHash: verificationHash,
+      emailVerificationExpiry: new Date(Date.now() + EMAIL_VERIFICATION_EXPIRY_MS),
+    },
   });
 
-  const session = await upsertSessionForLogin({
-    userId: user.id,
-    deviceId: resolveDeviceId({ deviceId }),
-    userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
-  });
-  const accessToken = generateAccessToken(user.id, user.email);
+  const baseUrl = env().APP_URL.replace(/\/$/, "");
+  const verifyUrl = `${baseUrl}/verify-email?token=${rawVerificationToken}`;
+  await sendVerificationEmail(user.email, verifyUrl);
+  req.log.debug({ userId: user.id }, "[auth] register: verification email sent");
 
+  // No tokens at this stage — the client must show a "check your email" screen
+  // and call /auth/login once the user clicks the verification link.
   res.status(201).json({
     user: toAuthUser(user),
-    accessToken,
-    refreshToken: session.refreshToken,
+    requiresEmailVerification: true,
   });
 });
 
@@ -229,9 +251,42 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
     throw new AppError(401, "UNAUTHORIZED", "Invalid email or password");
   }
 
+  // Per-account lockout — defends against credential stuffing that rotates IPs
+  // to bypass the IP-based authLimiter. Checked before bcrypt so a locked
+  // account isn't probed for password validity.
+  if (isLockedOut(user)) {
+    throw new AppError(
+      423,
+      "ACCOUNT_LOCKED",
+      "Too many failed login attempts. Try again later.",
+      { lockedUntil: user.lockedUntil!.toISOString() },
+    );
+  }
+
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
+    const next = nextStateOnFailure(user);
+    await prisma.user.update({ where: { id: user.id }, data: next });
     throw new AppError(401, "UNAUTHORIZED", "Invalid email or password");
+  }
+
+  // Password matched. Block password-account logins until email is verified;
+  // OAuth-linked users (appleId/googleId) are exempt because their providers
+  // already prove email control.
+  if (!user.emailVerified && !user.appleId && !user.googleId) {
+    throw new AppError(
+      403,
+      "EMAIL_NOT_VERIFIED",
+      "Please verify your email before logging in.",
+      { email: user.email },
+    );
+  }
+
+  if (shouldClearOnSuccess(user)) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { failedLoginAttempts: 0, lockedUntil: null },
+    });
   }
 
   const deviceIdRaw =
@@ -391,6 +446,11 @@ router.post("/reset-password", async (req: Request, res: Response) => {
       resetTokenHash: null,
       resetTokenExpiry: null,
       refreshTokenHash: null, // legacy slot — irrelevant after Session migration but harmless to clear
+      // A successful reset is implicit proof of email control, and we don't
+      // want a previously-locked account to remain locked after the owner
+      // already proved they're real.
+      failedLoginAttempts: 0,
+      lockedUntil: null,
     },
   });
   // Real "invalidate all sessions" effect now lives here.
@@ -398,6 +458,86 @@ router.post("/reset-password", async (req: Request, res: Response) => {
 
   req.log.debug({ userId: user.id }, "[auth] POST /auth/reset-password: success");
   res.json({ message: "Password has been reset. Please log in again." });
+});
+
+// ---------------------------------------------------------------------------
+// POST /auth/verify-email
+// ---------------------------------------------------------------------------
+// Confirms ownership of the email a password-registered user signed up with.
+// Idempotent-ish: a second call with the same (now-cleared) token will 400.
+
+router.post("/verify-email", async (req: Request, res: Response) => {
+  const { token } = verifyEmailSchema.parse(req.body);
+  const hash = hashToken(token);
+
+  const user = await prisma.user.findFirst({
+    where: {
+      emailVerificationTokenHash: hash,
+      emailVerificationExpiry: { gt: new Date() },
+    },
+  });
+
+  if (!user) {
+    req.log.warn(
+      { tokenHashPrefix: hash.slice(0, 8) },
+      "[auth] POST /auth/verify-email: invalid or expired token",
+    );
+    throw new AppError(400, "BAD_REQUEST", "Invalid or expired verification token");
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      emailVerified: true,
+      emailVerificationTokenHash: null,
+      emailVerificationExpiry: null,
+      // Successful verification is proof the human exists; clear any lock so
+      // they can log in immediately without waiting for the cooldown.
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    },
+  });
+
+  req.log.debug({ userId: user.id }, "[auth] POST /auth/verify-email: success");
+  res.json({ message: "Email verified. You can now log in." });
+});
+
+// ---------------------------------------------------------------------------
+// POST /auth/resend-verification
+// ---------------------------------------------------------------------------
+// Always returns 200 to avoid leaking whether an email is registered.
+
+router.post("/resend-verification", authLimiter, async (req: Request, res: Response) => {
+  const parsed = resendVerificationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new AppError(400, "BAD_REQUEST", "A valid email is required");
+  }
+
+  const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+
+  if (!user) {
+    req.log.debug("[auth] resend-verification: no matching user");
+  } else if (user.emailVerified) {
+    req.log.debug({ userId: user.id }, "[auth] resend-verification: already verified");
+  } else {
+    const raw = crypto.randomBytes(32).toString("hex");
+    const hash = hashToken(raw);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        emailVerificationTokenHash: hash,
+        emailVerificationExpiry: new Date(Date.now() + EMAIL_VERIFICATION_EXPIRY_MS),
+      },
+    });
+
+    const baseUrl = env().APP_URL.replace(/\/$/, "");
+    const verifyUrl = `${baseUrl}/verify-email?token=${raw}`;
+    await sendVerificationEmail(user.email, verifyUrl);
+    req.log.debug({ userId: user.id }, "[auth] resend-verification: email sent");
+  }
+
+  res.json({ message: "If that email is registered and unverified, a new link has been sent" });
 });
 
 // ---------------------------------------------------------------------------
@@ -438,9 +578,11 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
   if (!user && appleEmail) {
     user = await prisma.user.findUnique({ where: { email: appleEmail } });
     if (user) {
+      // Linking an existing password account to Apple is implicit proof of
+      // email control, so also flip emailVerified true if it wasn't already.
       user = await prisma.user.update({
         where: { id: user.id },
-        data: { appleId },
+        data: { appleId, emailVerified: true },
       });
     }
   }
@@ -454,6 +596,7 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
         email,
         username,
         appleId,
+        emailVerified: true,
         firstName: fullName?.givenName ?? null,
         lastName: fullName?.familyName ?? null,
       },
@@ -514,9 +657,11 @@ router.post("/google", authLimiter, async (req: Request, res: Response) => {
   if (!user && googleEmail && emailVerified) {
     user = await prisma.user.findUnique({ where: { email: googleEmail } });
     if (user) {
+      // Google already attests email control (we required email_verified above);
+      // flip our flag so the account isn't gated by /auth/verify-email.
       user = await prisma.user.update({
         where: { id: user.id },
-        data: { googleId },
+        data: { googleId, emailVerified: true },
       });
     }
   }
@@ -532,6 +677,7 @@ router.post("/google", authLimiter, async (req: Request, res: Response) => {
         email,
         username,
         googleId,
+        emailVerified: emailVerified,
         firstName: givenName ?? null,
         lastName: familyName ?? null,
       },
