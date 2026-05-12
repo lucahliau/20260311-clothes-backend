@@ -50,10 +50,7 @@ describe("nextStateOnFailure", () => {
     // This branch is mostly unreachable in practice (we short-circuit on
     // isLockedOut earlier), but we should never lose the lock if it ever ran.
     const existingLock = new Date(now.getTime() + 5_000);
-    const next = nextStateOnFailure(
-      { failedLoginAttempts: 0, lockedUntil: existingLock },
-      now,
-    );
+    const next = nextStateOnFailure({ failedLoginAttempts: 0, lockedUntil: existingLock }, now);
     expect(next.lockedUntil).toBe(existingLock);
   });
 });
@@ -68,8 +65,6 @@ describe("shouldClearOnSuccess", () => {
   });
 
   it("returns true when a stale lock is set (even if expired)", () => {
-    expect(
-      shouldClearOnSuccess({ failedLoginAttempts: 0, lockedUntil: new Date(0) }),
-    ).toBe(true);
+    expect(shouldClearOnSuccess({ failedLoginAttempts: 0, lockedUntil: new Date(0) })).toBe(true);
   });
 });

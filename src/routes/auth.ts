@@ -11,11 +11,7 @@ import { sendPasswordResetEmail, sendVerificationEmail } from "../lib/email.js";
 import { env } from "../lib/env.js";
 import { AppError } from "../middleware/error.js";
 import { loginBodySchema } from "../lib/loginBody.js";
-import {
-  isLockedOut,
-  nextStateOnFailure,
-  shouldClearOnSuccess,
-} from "../lib/loginLockout.js";
+import { isLockedOut, nextStateOnFailure, shouldClearOnSuccess } from "../lib/loginLockout.js";
 import {
   upsertSessionForLogin,
   rotateSession,
@@ -255,12 +251,9 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
   // to bypass the IP-based authLimiter. Checked before bcrypt so a locked
   // account isn't probed for password validity.
   if (isLockedOut(user)) {
-    throw new AppError(
-      423,
-      "ACCOUNT_LOCKED",
-      "Too many failed login attempts. Try again later.",
-      { lockedUntil: user.lockedUntil!.toISOString() },
-    );
+    throw new AppError(423, "ACCOUNT_LOCKED", "Too many failed login attempts. Try again later.", {
+      lockedUntil: user.lockedUntil!.toISOString(),
+    });
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
@@ -274,12 +267,9 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
   // OAuth-linked users (appleId/googleId) are exempt because their providers
   // already prove email control.
   if (!user.emailVerified && !user.appleId && !user.googleId) {
-    throw new AppError(
-      403,
-      "EMAIL_NOT_VERIFIED",
-      "Please verify your email before logging in.",
-      { email: user.email },
-    );
+    throw new AppError(403, "EMAIL_NOT_VERIFIED", "Please verify your email before logging in.", {
+      email: user.email,
+    });
   }
 
   if (shouldClearOnSuccess(user)) {

@@ -33,10 +33,7 @@ export interface NextFailureState {
  * threshold is reached, we set a lock and reset the counter so the *next*
  * failure after the lock expires starts fresh.
  */
-export function nextStateOnFailure(
-  state: LockoutState,
-  now: Date = new Date(),
-): NextFailureState {
+export function nextStateOnFailure(state: LockoutState, now: Date = new Date()): NextFailureState {
   const nextAttempts = state.failedLoginAttempts + 1;
   if (nextAttempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
     return {
