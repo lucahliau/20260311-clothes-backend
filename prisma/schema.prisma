@@ -142,11 +142,14 @@ model Message {
 }
 
 model DeviceToken {
-  id        String   @id @default(uuid())
-  userId    String
-  token     String   @unique
-  platform  String   @default("ios")
-  createdAt DateTime @default(now())
+  id             String    @id @default(uuid())
+  userId         String
+  token          String    @unique
+  platform       String    @default("ios")
+  createdAt      DateTime  @default(now())
+  lastSuccessAt  DateTime?
+  failureCount   Int       @default(0)
+  lastFailureAt  DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

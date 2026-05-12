@@ -550,22 +550,18 @@ router.post(
     const badge = await totalUnreadAcrossConversations(recipientId);
 
     try {
-      await sendPushToUser(
-        recipientId,
-        {
-          alert: {
-            title: sender.username ? `@${sender.username}` : "New message",
-            body: content ?? "Sent you a product",
-          },
-          badge,
-          data: {
-            type: "dm_message",
-            conversationId,
-            messageId: message.id,
-          },
+      await sendPushToUser(recipientId, {
+        alert: {
+          title: sender.username ? `@${sender.username}` : "New message",
+          body: content ?? "Sent you a product",
         },
-        prisma
-      );
+        badge,
+        data: {
+          type: "dm_message",
+          conversationId,
+          messageId: message.id,
+        },
+      });
     } catch (err) {
       console.warn("[messages] Push notification failed:", err);
     }

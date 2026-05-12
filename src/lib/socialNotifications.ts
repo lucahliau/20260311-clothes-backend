@@ -1,4 +1,3 @@
-import { prisma } from "./prisma.js";
 import { sendPushToUser } from "./apns.js";
 import { isBlockedPair } from "./social.js";
 
@@ -20,14 +19,10 @@ export async function notifySocialEvent(
     return;
   }
   try {
-    await sendPushToUser(
-      userId,
-      {
-        alert: { title: payload.title, body: payload.body },
-        data: payload.data,
-      },
-      prisma
-    );
+    await sendPushToUser(userId, {
+      alert: { title: payload.title, body: payload.body },
+      data: payload.data,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.warn("[social] push skipped:", msg);
