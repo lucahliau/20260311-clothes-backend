@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
-import { isBlockedPair as checkBlockedPair } from "../lib/social.js";
+import { isBlockedPair as checkBlockedPair, getBlockedUserIdSet } from "../lib/social.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { notifySocialEvent } from "../lib/socialNotifications.js";
@@ -110,7 +110,7 @@ router.post("/follow/:userId", requireAuth, async (req: Request, res: Response) 
       title: "New follow request",
       body: actor?.username ? `@${actor.username} wants to follow you` : "Someone wants to follow you",
       data: { type: "follow_request", followerId: me },
-    });
+    }, me);
   }
 
   res.status(201).json({
@@ -158,6 +158,14 @@ router.post("/follow-requests/:followerId/accept", requireAuth, async (req: Requ
     throw new AppError(404, "NOT_FOUND", "No pending follow request from this user");
   }
 
+  // Defense-in-depth: blocking deletes pending rows in a transaction, so this
+  // path is only reachable if that cleanup raced or future code skipped it.
+  // Refuse the accept and clean up the stale row.
+  if (await checkBlockedPair(me, followerId)) {
+    await prisma.follow.delete({ where: { id: row.id } });
+    throw new AppError(403, "BLOCKED", "You cannot interact with this user");
+  }
+
   const follow = await prisma.follow.update({
     where: { id: row.id },
     data: { status: "ACCEPTED", respondedAt: new Date() },
@@ -171,7 +179,7 @@ router.post("/follow-requests/:followerId/accept", requireAuth, async (req: Requ
     title: "Follow request accepted",
     body: accepter?.username ? `@${accepter.username} accepted your follow request` : "Your follow request was accepted",
     data: { type: "follow_accepted", followeeId: me },
-  });
+  }, me);
 
   res.json({ follow });
 });
@@ -254,7 +262,7 @@ router.post("/friends/request/:userId", requireAuth, async (req: Request, res: R
     title: "New friend request",
     body: actor?.username ? `@${actor.username} sent you a friend request` : "You have a new friend request",
     data: { type: "friend_request", fromUserId: me },
-  });
+  }, me);
 
   res.status(201).json({ friendRequest });
 });
@@ -294,6 +302,11 @@ router.post("/friends/requests/:fromUserId/accept", requireAuth, async (req: Req
     throw new AppError(404, "NOT_FOUND", "No pending friend request from this user");
   }
 
+  if (await checkBlockedPair(me, fromUserId)) {
+    await prisma.friendRequest.delete({ where: { id: row.id } });
+    throw new AppError(403, "BLOCKED", "You cannot interact with this user");
+  }
+
   const friendRequest = await prisma.friendRequest.update({
     where: { id: row.id },
     data: { status: "ACCEPTED" satisfies FriendRequestStatus },
@@ -307,7 +320,7 @@ router.post("/friends/requests/:fromUserId/accept", requireAuth, async (req: Req
     title: "Friend request accepted",
     body: accepter?.username ? `@${accepter.username} accepted your friend request` : "Your friend request was accepted",
     data: { type: "friend_accepted", toUserId: me },
-  });
+  }, me);
 
   res.json({ friendRequest });
 });
@@ -368,11 +381,18 @@ router.delete("/friends/:userId", requireAuth, async (req: Request, res: Respons
 router.get("/followers", requireAuth, async (req: Request, res: Response) => {
   const { limit, offset } = paginationSchema.parse(req.query);
   const me = req.user!.userId;
+  const blocked = [...(await getBlockedUserIdSet(me))];
+
+  const where = {
+    followeeId: me,
+    status: "ACCEPTED" as const,
+    followerId: { notIn: blocked },
+  };
 
   const [total, rows] = await prisma.$transaction([
-    prisma.follow.count({ where: { followeeId: me, status: "ACCEPTED" } }),
+    prisma.follow.count({ where }),
     prisma.follow.findMany({
-      where: { followeeId: me, status: "ACCEPTED" },
+      where,
       orderBy: { createdAt: "desc" },
       take: limit,
       skip: offset,
@@ -395,11 +415,18 @@ router.get("/followers", requireAuth, async (req: Request, res: Response) => {
 router.get("/following", requireAuth, async (req: Request, res: Response) => {
   const { limit, offset } = paginationSchema.parse(req.query);
   const me = req.user!.userId;
+  const blocked = [...(await getBlockedUserIdSet(me))];
+
+  const where = {
+    followerId: me,
+    status: "ACCEPTED" as const,
+    followeeId: { notIn: blocked },
+  };
 
   const [total, rows] = await prisma.$transaction([
-    prisma.follow.count({ where: { followerId: me, status: "ACCEPTED" } }),
+    prisma.follow.count({ where }),
     prisma.follow.findMany({
-      where: { followerId: me, status: "ACCEPTED" },
+      where,
       orderBy: { createdAt: "desc" },
       take: limit,
       skip: offset,
@@ -422,8 +449,18 @@ router.get("/following", requireAuth, async (req: Request, res: Response) => {
 router.get("/friends", requireAuth, async (req: Request, res: Response) => {
   const { limit, offset } = paginationSchema.parse(req.query);
   const me = req.user!.userId;
+  const blocked = [...(await getBlockedUserIdSet(me))];
 
-  const whereAccepted = { status: "ACCEPTED" as const, OR: [{ fromUserId: me }, { toUserId: me }] };
+  // Exclude any friendship row where the *other* side is in the block set.
+  // `notIn` with an empty array is a no-op in Prisma, so unblocked users see
+  // unchanged behavior.
+  const whereAccepted = {
+    status: "ACCEPTED" as const,
+    OR: [
+      { fromUserId: me, toUserId: { notIn: blocked } },
+      { fromUserId: { notIn: blocked }, toUserId: me },
+    ],
+  };
 
   const [total, rows] = await prisma.$transaction([
     prisma.friendRequest.count({ where: whereAccepted }),
@@ -453,25 +490,26 @@ router.get("/friends", requireAuth, async (req: Request, res: Response) => {
 
 router.get("/pending", requireAuth, async (req: Request, res: Response) => {
   const me = req.user!.userId;
+  const blocked = [...(await getBlockedUserIdSet(me))];
 
   const [incomingFollows, outgoingFollows, incomingFriends, outgoingFriends] = await Promise.all([
     prisma.follow.findMany({
-      where: { followeeId: me, status: "PENDING" },
+      where: { followeeId: me, status: "PENDING", followerId: { notIn: blocked } },
       orderBy: { createdAt: "desc" },
       include: { follower: { omit: PUBLIC_USER_OMIT } },
     }),
     prisma.follow.findMany({
-      where: { followerId: me, status: "PENDING" },
+      where: { followerId: me, status: "PENDING", followeeId: { notIn: blocked } },
       orderBy: { createdAt: "desc" },
       include: { followee: { omit: PUBLIC_USER_OMIT } },
     }),
     prisma.friendRequest.findMany({
-      where: { toUserId: me, status: "PENDING" },
+      where: { toUserId: me, status: "PENDING", fromUserId: { notIn: blocked } },
       orderBy: { createdAt: "desc" },
       include: { fromUser: { omit: PUBLIC_USER_OMIT } },
     }),
     prisma.friendRequest.findMany({
-      where: { fromUserId: me, status: "PENDING" },
+      where: { fromUserId: me, status: "PENDING", toUserId: { notIn: blocked } },
       orderBy: { createdAt: "desc" },
       include: { toUser: { omit: PUBLIC_USER_OMIT } },
     }),

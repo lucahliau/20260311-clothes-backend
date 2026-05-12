@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
-import { isBlockedPair } from "../lib/social.js";
+import { isBlockedPair, getBlockedUserIdSet } from "../lib/social.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { sendPushToUser } from "../lib/apns.js";
@@ -106,8 +106,14 @@ async function unreadCountForMembership(
 }
 
 async function totalUnreadAcrossConversations(userId: string): Promise<number> {
+  const blocked = [...(await getBlockedUserIdSet(userId))];
   const memberships = await prisma.conversationParticipant.findMany({
-    where: { userId },
+    where: {
+      userId,
+      // Hide conversations that contain any user the viewer can't see.
+      // `none` with an empty `in` set is vacuously true (no filtering applied).
+      conversation: { participants: { none: { userId: { in: blocked } } } },
+    },
     select: { conversationId: true, lastReadAt: true },
   });
   let total = 0;
@@ -199,11 +205,20 @@ function serializeMessage(
 router.get("/conversations", requireAuth, async (req: Request, res: Response) => {
   const me = req.user!.userId;
   const { limit, offset } = listConversationsQuery.parse(req.query);
+  const blocked = [...(await getBlockedUserIdSet(me))];
+
+  // Hide every conversation that contains a user the viewer can't see (in
+  // either direction). For 1:1 threads this is the counterparty; for any
+  // future group threads it also hides groups containing a blocked member.
+  const where = {
+    userId: me,
+    conversation: { participants: { none: { userId: { in: blocked } } } },
+  };
 
   const [total, memberships] = await prisma.$transaction([
-    prisma.conversationParticipant.count({ where: { userId: me } }),
+    prisma.conversationParticipant.count({ where }),
     prisma.conversationParticipant.findMany({
-      where: { userId: me },
+      where,
       orderBy: { conversation: { updatedAt: "desc" } },
       take: limit,
       skip: offset,
