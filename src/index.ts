@@ -1,9 +1,9 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import morgan from "morgan";
 import dotenv from "dotenv";
 import crypto from "crypto";
+import { pinoHttp } from "pino-http";
 
 dotenv.config();
 
@@ -11,9 +11,21 @@ import { validateEnv, env, getAppleUniversalLinkAppId } from "./lib/env.js";
 import { buildAppleAppSiteAssociation } from "./lib/appleAppSiteAssociation.js";
 validateEnv();
 
+import { logger, REDACT_PATHS } from "./lib/logger.js";
+import { initSentry, attachSentryErrorHandler } from "./lib/sentry.js";
+
+// Sentry must initialize before the Express app is built so its instrumentation
+// can wrap incoming requests. A missing DSN turns this into a no-op.
+initSentry({
+  dsn: env().SENTRY_DSN,
+  environment: env().SENTRY_ENVIRONMENT ?? env().NODE_ENV,
+  tracesSampleRate: env().SENTRY_TRACES_SAMPLE_RATE,
+});
+
 import { prisma } from "./lib/prisma.js";
 import { globalLimiter } from "./middleware/rateLimit.js";
 import { errorHandler } from "./middleware/error.js";
+import { requestIdMiddleware } from "./middleware/requestId.js";
 import authRouter from "./routes/auth.js";
 import usersRouter from "./routes/users.js";
 import itemsRouter from "./routes/items.js";
@@ -182,6 +194,9 @@ if (env().NODE_ENV === "production" || process.env.TRUST_PROXY === "1") {
   app.set("trust proxy", 1);
 }
 
+// Request ID first so every later middleware (including pino-http) sees req.id.
+app.use(requestIdMiddleware);
+
 app.use(helmet());
 app.use(
   cors(
@@ -190,17 +205,61 @@ app.use(
       : { origin: true, credentials: true }
   )
 );
-app.use(morgan("dev"));
+
+// Per-request JSON logger. Replaces morgan and emits one structured line per
+// completed request with status, duration, and the request id.
+app.use(
+  pinoHttp({
+    logger,
+    genReqId: (req) => {
+      const existing = (req as { id?: string }).id;
+      return typeof existing === "string" ? existing : crypto.randomUUID();
+    },
+    redact: { paths: REDACT_PATHS, censor: "[Redacted]", remove: false },
+    customLogLevel: (_req, res, err) => {
+      if (err || res.statusCode >= 500) return "error";
+      if (res.statusCode >= 400) return "warn";
+      // Health/readiness probes ping every few seconds — keep them out of info.
+      const url = (_req as { url?: string }).url ?? "";
+      if (url === "/health" || url === "/ready") return "debug";
+      return "info";
+    },
+    serializers: {
+      req: (req) => ({
+        id: req.id,
+        method: req.method,
+        url: req.url,
+        // Note: deliberately omitting headers + body; redaction covers them
+        // but the noise isn't worth it for normal requests.
+      }),
+      res: (res) => ({ statusCode: res.statusCode }),
+    },
+  })
+);
+
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use(globalLimiter);
 
-app.get("/health", async (_req, res) => {
+app.get("/health", async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
     res.json({ status: "ok", db: "connected", timestamp: new Date().toISOString() });
-  } catch {
+  } catch (err) {
+    req.log.error({ err }, "Health check failed: DB unreachable");
     res.status(503).json({ status: "error", db: "disconnected", timestamp: new Date().toISOString() });
+  }
+});
+
+// Readiness probe — distinct from /health for clarity. Same DB check today;
+// can grow to include downstream services without changing /health's contract.
+app.get("/ready", async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ status: "ready", checks: { db: "ok" } });
+  } catch (err) {
+    req.log.error({ err }, "Readiness probe failed: DB unreachable");
+    res.status(503).json({ status: "not_ready", checks: { db: "error" } });
   }
 });
 
@@ -214,11 +273,10 @@ app.get("/.well-known/apple-app-site-association", (_req, res) => {
 });
 
 app.get("/reset-password", async (req, res, next) => {
-  const logPrefix = "[password-reset] GET /reset-password";
   try {
     const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
     if (!token) {
-      console.warn(`${logPrefix}: missing or empty token query`);
+      req.log.warn("Password reset: missing or empty token query");
       res.type("html").send(resetPasswordFallbackHtml({ reason: "no-token" }));
       return;
     }
@@ -233,17 +291,15 @@ app.get("/reset-password", async (req, res, next) => {
     });
 
     if (!user) {
-      console.warn(`${logPrefix}: no matching user or token expired (hash prefix ${hash.slice(0, 8)}…)`);
+      req.log.warn({ hashPrefix: hash.slice(0, 8) }, "Password reset: no matching user or token expired");
       res.type("html").send(resetPasswordFallbackHtml({ reason: "invalid" }));
       return;
     }
 
-    if (env().NODE_ENV !== "production") {
-      console.debug(`${logPrefix}: serving reset form`, { email: user.email });
-    }
+    req.log.debug("Password reset: serving reset form");
     res.type("html").send(resetPasswordFallbackHtml({ email: user.email, token }));
   } catch (err) {
-    console.error(`${logPrefix}: unexpected error`, err);
+    req.log.error({ err }, "Password reset: unexpected error rendering form");
     next(err);
   }
 });
@@ -261,12 +317,17 @@ app.use((_req, res) => {
   res.status(404).json({ error: { code: "NOT_FOUND", message: "Route not found" } });
 });
 
+// Sentry's error handler captures 5xx (and only 5xx, per attachSentryErrorHandler's
+// filter) and forwards to our custom errorHandler for the actual response shape.
+// Must be placed after routes and before errorHandler.
+attachSentryErrorHandler(app);
 app.use(errorHandler);
 
 const PORT = env().PORT;
 app.listen(PORT, () => {
   const e = env();
-  console.log(
-    `Server listening on port ${PORT} | APP_URL=${e.APP_URL} (use this origin for clients and password-reset links)`
+  logger.info(
+    { port: PORT, appUrl: e.APP_URL, env: e.NODE_ENV },
+    "Server listening"
   );
 });

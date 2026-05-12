@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import fs from "node:fs";
 import { env } from "./env.js";
 import { prisma } from "./prisma.js";
+import { logger } from "./logger.js";
 
 const APNS_HOST_PROD = "https://api.push.apple.com";
 const APNS_HOST_DEV = "https://api.sandbox.push.apple.com";
@@ -209,7 +210,7 @@ export async function sendPushToUser(
       try {
         if (r.status === "rejected") {
           // Network/HTTP/2 error before we got an APNS response. Treat as transient.
-          console.warn("[APNs] Push transport error:", r.reason);
+          logger.warn({ err: r.reason }, "[APNs] Push transport error");
           return;
         }
         const { token, result } = r.value;
@@ -222,13 +223,13 @@ export async function sendPushToUser(
           await applyRetry(token);
         } else {
           // suppress: our config/payload bug — surface it, but don't touch the token.
-          console.warn(
-            "[APNs] Suppressed push failure (config/payload):",
-            JSON.stringify({ status: result.statusCode, reason: result.reason }),
+          logger.warn(
+            { status: result.statusCode, reason: result.reason },
+            "[APNs] Suppressed push failure (config/payload)"
           );
         }
       } catch (err) {
-        console.warn("[APNs] Token-health write failed:", err);
+        logger.warn({ err }, "[APNs] Token-health write failed");
       }
     }),
   );

@@ -337,9 +337,7 @@ router.post("/forgot-password", authLimiter, async (req: Request, res: Response)
   const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
 
   if (!user) {
-    if (env().NODE_ENV !== "production") {
-      console.debug("[auth] forgot-password: no matching user");
-    }
+    req.log.debug("[auth] forgot-password: no matching user");
   } else {
     const raw = crypto.randomBytes(32).toString("hex");
     const hash = hashToken(raw);
@@ -355,9 +353,7 @@ router.post("/forgot-password", authLimiter, async (req: Request, res: Response)
     const baseUrl = env().APP_URL.replace(/\/$/, "");
     const resetUrl = `${baseUrl}/reset-password?token=${raw}`;
     await sendPasswordResetEmail(user.email, resetUrl);
-    if (env().NODE_ENV !== "production") {
-      console.debug("[auth] forgot-password: reset email sent via Resend");
-    }
+    req.log.debug("[auth] forgot-password: reset email sent via Resend");
   }
 
   res.json({ message: "If that email is registered, a reset link has been sent" });
@@ -379,9 +375,10 @@ router.post("/reset-password", async (req: Request, res: Response) => {
   });
 
   if (!user) {
-    console.warn("[auth] POST /auth/reset-password: invalid or expired token", {
-      tokenHashPrefix: hash.slice(0, 8),
-    });
+    req.log.warn(
+      { tokenHashPrefix: hash.slice(0, 8) },
+      "[auth] POST /auth/reset-password: invalid or expired token"
+    );
     throw new AppError(400, "BAD_REQUEST", "Invalid or expired reset token");
   }
 
@@ -399,9 +396,7 @@ router.post("/reset-password", async (req: Request, res: Response) => {
   // Real "invalidate all sessions" effect now lives here.
   await deleteAllSessionsForUser(user.id);
 
-  if (env().NODE_ENV !== "production") {
-    console.debug("[auth] POST /auth/reset-password: success", { userId: user.id });
-  }
+  req.log.debug({ userId: user.id }, "[auth] POST /auth/reset-password: success");
   res.json({ message: "Password has been reset. Please log in again." });
 });
 

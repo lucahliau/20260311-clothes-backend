@@ -1,5 +1,6 @@
 import { sendPushToUser } from "./apns.js";
 import { isBlockedPair } from "./social.js";
+import { logger } from "./logger.js";
 
 /**
  * Send a social-event push to `userId`.
@@ -23,8 +24,7 @@ export async function notifySocialEvent(
       alert: { title: payload.title, body: payload.body },
       data: payload.data,
     });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.warn("[social] push skipped:", msg);
+  } catch (err) {
+    logger.warn({ err }, "[social] push skipped");
   }
 }

@@ -563,7 +563,7 @@ router.post(
         },
       });
     } catch (err) {
-      console.warn("[messages] Push notification failed:", err);
+      req.log.warn({ err }, "[messages] Push notification failed");
     }
 
     res.status(201).json({ message: serializeMessage(message, me) });

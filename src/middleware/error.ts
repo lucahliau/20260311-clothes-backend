@@ -54,17 +54,15 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     }
   }
 
-  // 2. Log the error with context (Skip logging for 404s/401s if desired, but here we log everything for clarity as requested)
-  // For 500s, log the stack trace. For others, just the message.
-  const isInternal = statusCode === 500;
-  
-  console.error(`[${new Date().toISOString()}] ${req.method} ${req.path} >> ${statusCode} ${code}`);
+  // 2. Log via the request-scoped logger so reqId + userId are bound. 5xx
+  //    gets a full stack (also auto-captured to Sentry by setupExpressErrorHandler);
+  //    4xx is a warn with just the response shape, since the client triggered it.
+  const isInternal = statusCode >= 500;
+  const log = req.log;
   if (isInternal) {
-    console.error(err);
+    log.error({ err, statusCode, code }, `${req.method} ${req.path} >> ${statusCode} ${code}`);
   } else {
-    // Optional: Log non-500 errors as warnings if you want to see them in console
-    console.warn(`  Message: ${message}`);
-    if (details) console.warn(`  Details:`, JSON.stringify(details));
+    log.warn({ statusCode, code, details }, `${req.method} ${req.path} >> ${statusCode} ${code}: ${message}`);
   }
 
   // 3. Send Response

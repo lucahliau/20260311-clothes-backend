@@ -116,7 +116,7 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
       return;
     }
   } catch (err) {
-    console.error("buildPersonalizedFeed failed, falling back to random feed", err);
+    req.log.warn({ err }, "buildPersonalizedFeed failed, falling back to random feed");
   }
 
   // Fallback: original random feed (no embeddings required).

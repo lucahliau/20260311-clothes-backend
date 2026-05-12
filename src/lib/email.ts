@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import { env } from "./env.js";
 import { AppError } from "../middleware/error.js";
+import { logger } from "./logger.js";
 
 let _resend: Resend | null = null;
 
@@ -32,7 +33,10 @@ export async function sendPasswordResetEmail(to: string, resetUrl: string) {
   });
 
   if (result.error) {
-    console.error("[Resend] email send failed:", result.error.name, result.error.message);
+    logger.error(
+      { resendErrorName: result.error.name, resendErrorMessage: result.error.message },
+      "[Resend] email send failed"
+    );
     throw new AppError(503, "EMAIL_SEND_FAILED", "Could not send password reset email");
   }
 }

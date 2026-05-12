@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { setSentryUser } from "../lib/sentry.js";
 
 export interface AuthPayload {
   userId: string;
@@ -12,6 +13,17 @@ declare global {
       user?: AuthPayload;
     }
   }
+}
+
+/**
+ * Bind the authenticated userId to the request-scoped logger and Sentry
+ * scope so every subsequent log line / captured exception carries it.
+ */
+function bindAuthContext(req: Request, payload: AuthPayload): void {
+  if (req.log) {
+    req.log = req.log.child({ userId: payload.userId });
+  }
+  setSentryUser(req, payload.userId);
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
@@ -27,6 +39,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload;
     req.user = payload;
+    bindAuthContext(req, payload);
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });
@@ -44,6 +57,7 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload;
     req.user = payload;
+    bindAuthContext(req, payload);
   } catch {
     // no user
   }

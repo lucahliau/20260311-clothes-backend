@@ -31,6 +31,14 @@ const envSchema = z.object({
   APPLE_UNIVERSAL_LINK_APP_ID: z.string().optional(),
 
   R2_PUBLIC_URL: z.string().url().optional(),
+
+  // Observability — all optional. When SENTRY_DSN is unset Sentry is a no-op.
+  SENTRY_DSN: z.string().optional(),
+  SENTRY_ENVIRONMENT: z.string().optional(),
+  SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0),
+  LOG_LEVEL: z
+    .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
+    .optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
