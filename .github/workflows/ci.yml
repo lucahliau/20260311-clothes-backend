@@ -37,5 +37,12 @@ jobs:
       - name: TypeScript
         run: npm run typecheck
 
+      # The tests are all pure unit tests that never hit the DB, but importing
+      # any module transitively pulls in src/lib/prisma.ts which throws at
+      # module load if DATABASE_URL is missing. A dummy URL satisfies the
+      # guard — Prisma doesn't connect until a query actually runs, which
+      # no test does.
       - name: Vitest
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
         run: npm test
