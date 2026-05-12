@@ -35,6 +35,7 @@ model User {
   swipes                 Swipe[]
   collections            Collection[]
   deviceTokens           DeviceToken[]
+  sessions               Session[]
   following              Follow[]       @relation("UserFollowing")
   followers              Follow[]       @relation("UserFollowers")
   friendRequestsSent     FriendRequest[] @relation("FriendRequestFrom")
@@ -43,6 +44,28 @@ model User {
   blocksReceived         UserBlock[]    @relation("UserBlockedBy")
   conversationParticipants ConversationParticipant[]
   sentMessages           Message[]
+}
+
+/// Per-device refresh-token session. Replaces the single `User.refreshTokenHash`
+/// slot so concurrent refreshes don't overwrite each other and multi-device
+/// logins don't invalidate each other's sessions.
+model Session {
+  id                       String    @id @default(uuid())
+  userId                   String
+  deviceId                 String
+  refreshTokenHash         String    @unique
+  previousRefreshTokenHash String?   @unique
+  rotatedAt                DateTime?
+  expiresAt                DateTime
+  lastSeenAt               DateTime  @default(now())
+  createdAt                DateTime  @default(now())
+  userAgent                String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceId])
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 enum FollowStatus {

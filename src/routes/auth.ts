@@ -11,12 +11,25 @@ import { sendPasswordResetEmail } from "../lib/email.js";
 import { env } from "../lib/env.js";
 import { AppError } from "../middleware/error.js";
 import { loginBodySchema } from "../lib/loginBody.js";
+import {
+  upsertSessionForLogin,
+  rotateSession,
+  findSessionByRefreshHash,
+  deleteSessionByRefreshHash,
+  deleteSessionForDevice,
+  deleteAllSessionsForUser,
+  hashRefreshToken,
+  isExpired,
+  deleteSessionById,
+} from "../lib/sessions.js";
 
 const router = Router();
 
 const BCRYPT_ROUNDS = 12;
-const ACCESS_TOKEN_EXPIRY = "15m";
-const REFRESH_TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// Longer than the old 15m: a backgrounded app shouldn't trigger a refresh
+// every time the user re-opens it. Refresh tokens still get rotated on use,
+// so token theft is still detected promptly via the next refresh attempt.
+const ACCESS_TOKEN_EXPIRY = "1h";
 const RESET_TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
 const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
 const APPLE_ISSUER = "https://appleid.apple.com";
@@ -72,14 +85,21 @@ function generateAccessToken(userId: string, email: string): string {
   });
 }
 
-function generateRefreshToken(): { raw: string; hash: string } {
-  const raw = crypto.randomBytes(32).toString("hex");
-  const hash = crypto.createHash("sha256").update(raw).digest("hex");
-  return { raw, hash };
-}
-
+/** Hash a password-reset token. (Refresh-token hashing lives in sessions.ts.) */
 function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+/**
+ * Either echoes the client-provided deviceId or generates a synthetic one.
+ * Old iOS builds that don't yet send `deviceId` still get a working session;
+ * it just isn't reusable across devices.
+ */
+function resolveDeviceId(body: { deviceId?: string }): string {
+  if (typeof body.deviceId === "string" && body.deviceId.length >= 8) {
+    return body.deviceId;
+  }
+  return `legacy-${crypto.randomUUID()}`;
 }
 
 let _appleJwks: ReturnType<typeof jose.createRemoteJWKSet> | null = null;
@@ -102,6 +122,8 @@ function getGoogleJwks() {
 // Validation schemas
 // ---------------------------------------------------------------------------
 
+const deviceIdField = z.string().min(8).max(128).optional();
+
 const registerSchema = z.object({
   email: z.string().email(),
   username: z
@@ -110,6 +132,7 @@ const registerSchema = z.object({
     .max(30)
     .regex(/^[a-zA-Z0-9_]+$/, "Username may only contain letters, numbers, and underscores"),
   password: z.string().min(8).max(128),
+  deviceId: deviceIdField,
 });
 
 const appleAuthSchema = z.object({
@@ -120,10 +143,17 @@ const appleAuthSchema = z.object({
       familyName: z.string().optional(),
     })
     .optional(),
+  deviceId: deviceIdField,
 });
 
 const googleAuthSchema = z.object({
   idToken: z.string(),
+  deviceId: deviceIdField,
+});
+
+const logoutSchema = z.object({
+  refreshToken: z.string().optional(),
+  deviceId: deviceIdField,
 });
 
 const changePasswordSchema = z.object({
@@ -146,7 +176,7 @@ const resetPasswordSchema = z.object({
 
 router.post("/register", authLimiter, async (req: Request, res: Response) => {
   const body = req.body ?? {};
-  const { email, username, password } = registerSchema.parse(body);
+  const { email, username, password, deviceId } = registerSchema.parse(body);
 
   const existingUser = await prisma.user.findFirst({
     where: { OR: [{ email }, { username }] },
@@ -158,23 +188,22 @@ router.post("/register", authLimiter, async (req: Request, res: Response) => {
   }
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-  const refresh = generateRefreshToken();
 
   const user = await prisma.user.create({
-    data: {
-      email,
-      username,
-      passwordHash,
-      refreshTokenHash: refresh.hash,
-    },
+    data: { email, username, passwordHash },
   });
 
+  const session = await upsertSessionForLogin({
+    userId: user.id,
+    deviceId: resolveDeviceId({ deviceId }),
+    userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
+  });
   const accessToken = generateAccessToken(user.id, user.email);
 
   res.status(201).json({
     user: toAuthUser(user),
     accessToken,
-    refreshToken: refresh.raw,
+    refreshToken: session.refreshToken,
   });
 });
 
@@ -205,18 +234,21 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
     throw new AppError(401, "UNAUTHORIZED", "Invalid email or password");
   }
 
-  const refresh = generateRefreshToken();
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { refreshTokenHash: refresh.hash },
+  const deviceIdRaw =
+    typeof (raw as { deviceId?: unknown }).deviceId === "string"
+      ? ((raw as { deviceId: string }).deviceId)
+      : undefined;
+  const session = await upsertSessionForLogin({
+    userId: user.id,
+    deviceId: resolveDeviceId({ deviceId: deviceIdRaw }),
+    userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
   });
-
   const accessToken = generateAccessToken(user.id, user.email);
 
   res.json({
     user: toAuthUser(user),
     accessToken,
-    refreshToken: refresh.raw,
+    refreshToken: session.refreshToken,
   });
 });
 
@@ -231,25 +263,31 @@ router.post("/refresh", async (req: Request, res: Response) => {
     throw new AppError(400, "BAD_REQUEST", "refreshToken is required");
   }
 
-  const hash = hashToken(refreshToken);
+  const hash = hashRefreshToken(refreshToken);
+  const session = await findSessionByRefreshHash(hash);
 
-  const user = await prisma.user.findFirst({
-    where: { refreshTokenHash: hash },
+  if (!session) {
+    throw new AppError(401, "UNAUTHORIZED", "Invalid refresh token");
+  }
+  if (isExpired(session.expiresAt)) {
+    await deleteSessionById(session.id);
+    throw new AppError(401, "UNAUTHORIZED", "Session expired");
+  }
+
+  // We need email for the access-token payload. Lookup is cheap and indexed.
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { id: true, email: true },
   });
-
   if (!user) {
+    await deleteSessionById(session.id);
     throw new AppError(401, "UNAUTHORIZED", "Invalid refresh token");
   }
 
-  const newRefresh = generateRefreshToken();
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { refreshTokenHash: newRefresh.hash },
-  });
-
+  const rotated = await rotateSession(session.id);
   const accessToken = generateAccessToken(user.id, user.email);
 
-  res.json({ accessToken, refreshToken: newRefresh.raw });
+  res.json({ accessToken, refreshToken: rotated.refreshToken });
 });
 
 // ---------------------------------------------------------------------------
@@ -257,12 +295,32 @@ router.post("/refresh", async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.post("/logout", requireAuth, async (req: Request, res: Response) => {
-  await prisma.user.update({
-    where: { id: req.user!.userId },
-    data: { refreshTokenHash: null },
-  });
+  const parsed = logoutSchema.safeParse(req.body ?? {});
+  const me = req.user!.userId;
 
+  // Prefer the refresh-token lookup (works even on a different device tied
+  // to the same user); fall back to (userId, deviceId); finally fall back to
+  // a no-op so the client still sees a 200 and clears local state.
+  if (parsed.success && parsed.data.refreshToken) {
+    const removed = await deleteSessionByRefreshHash(hashRefreshToken(parsed.data.refreshToken));
+    if (removed > 0) {
+      res.json({ message: "Logged out" });
+      return;
+    }
+  }
+  if (parsed.success && parsed.data.deviceId) {
+    await deleteSessionForDevice(me, parsed.data.deviceId);
+  }
   res.json({ message: "Logged out" });
+});
+
+// ---------------------------------------------------------------------------
+// POST /auth/logout-all — invalidate every session for the current user
+// ---------------------------------------------------------------------------
+
+router.post("/logout-all", requireAuth, async (req: Request, res: Response) => {
+  const removed = await deleteAllSessionsForUser(req.user!.userId);
+  res.json({ message: "All sessions invalidated", removed });
 });
 
 // ---------------------------------------------------------------------------
@@ -335,9 +393,11 @@ router.post("/reset-password", async (req: Request, res: Response) => {
       passwordHash,
       resetTokenHash: null,
       resetTokenExpiry: null,
-      refreshTokenHash: null, // invalidate all sessions
+      refreshTokenHash: null, // legacy slot — irrelevant after Session migration but harmless to clear
     },
   });
+  // Real "invalidate all sessions" effect now lives here.
+  await deleteAllSessionsForUser(user.id);
 
   if (env().NODE_ENV !== "production") {
     console.debug("[auth] POST /auth/reset-password: success", { userId: user.id });
@@ -353,7 +413,7 @@ router.post("/reset-password", async (req: Request, res: Response) => {
 // APPLE_CLIENT_ID must match the token audience (your App ID / bundle ID, or Services ID for web).
 
 router.post("/apple", authLimiter, async (req: Request, res: Response) => {
-  const { identityToken, fullName } = appleAuthSchema.parse(req.body);
+  const { identityToken, fullName, deviceId } = appleAuthSchema.parse(req.body);
 
   const clientId = process.env.APPLE_CLIENT_ID;
   if (!clientId) {
@@ -405,18 +465,17 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
     });
   }
 
-  const refresh = generateRefreshToken();
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { refreshTokenHash: refresh.hash },
+  const session = await upsertSessionForLogin({
+    userId: user.id,
+    deviceId: resolveDeviceId({ deviceId }),
+    userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
   });
-
   const accessToken = generateAccessToken(user.id, user.email);
 
   res.json({
     user: toAuthUser(user),
     accessToken,
-    refreshToken: refresh.raw,
+    refreshToken: session.refreshToken,
     isNewUser: !user.onboardingCompleted,
   });
 });
@@ -428,7 +487,7 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
 // GOOGLE_CLIENT_ID must match the ID token aud (typically your iOS OAuth client ID from Google Cloud).
 
 router.post("/google", authLimiter, async (req: Request, res: Response) => {
-  const { idToken } = googleAuthSchema.parse(req.body);
+  const { idToken, deviceId } = googleAuthSchema.parse(req.body);
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   if (!clientId) {
@@ -484,18 +543,17 @@ router.post("/google", authLimiter, async (req: Request, res: Response) => {
     });
   }
 
-  const refresh = generateRefreshToken();
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { refreshTokenHash: refresh.hash },
+  const session = await upsertSessionForLogin({
+    userId: user.id,
+    deviceId: resolveDeviceId({ deviceId }),
+    userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
   });
-
   const accessToken = generateAccessToken(user.id, user.email);
 
   res.json({
     user: toAuthUser(user),
     accessToken,
-    refreshToken: refresh.raw,
+    refreshToken: session.refreshToken,
     isNewUser: !user.onboardingCompleted,
   });
 });
