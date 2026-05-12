@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   ci:
-    name: format + lint + typecheck + test
+    # Keep this name short and stable — it's what shows up in the branch
+    # protection "Required status checks" search.
+    name: ci
     runs-on: ubuntu-latest
 
     steps:
