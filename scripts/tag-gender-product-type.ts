@@ -77,7 +77,7 @@ function inferProductType(category: string, subcategory: string | null): Product
   return "other";
 }
 
-function normalizeGender(gender: string | null): Gender {
+function _normalizeGender(gender: string | null): Gender {
   if (!gender) return "unisex";
   const g = gender.toLowerCase().trim();
   if (g === "men" || g === "male") return "male";
@@ -93,7 +93,14 @@ async function main() {
     where: {
       OR: [{ gender: null }, { productType: null }],
     },
-    select: { id: true, name: true, category: true, subcategory: true, gender: true, productType: true },
+    select: {
+      id: true,
+      name: true,
+      category: true,
+      subcategory: true,
+      gender: true,
+      productType: true,
+    },
   });
 
   console.log(`Processing ${items.length} items (missing gender or productType)...\n`);
@@ -116,7 +123,9 @@ async function main() {
     updated++;
 
     if (updated <= 10) {
-      console.log(`  [${item.name}] category=${item.category} sub=${item.subcategory ?? "-"} → gender=${inferredGender} productType=${inferredProductType}`);
+      console.log(
+        `  [${item.name}] category=${item.category} sub=${item.subcategory ?? "-"} → gender=${inferredGender} productType=${inferredProductType}`,
+      );
     }
 
     const pct = Math.round(((i + 1) / total) * 100);

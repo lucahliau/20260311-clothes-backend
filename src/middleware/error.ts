@@ -6,7 +6,7 @@ export class AppError extends Error {
     public statusCode: number,
     public code: string,
     message: string,
-    public details?: unknown
+    public details?: unknown,
   ) {
     super(message);
     this.name = "AppError";
@@ -31,9 +31,11 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     message = "Validation failed";
     details = err.flatten().fieldErrors;
   } else if (err instanceof Error) {
-    // Prisma known errors
+    // Prisma known errors carry a `code` ("P2002", "P2025", …) and an
+    // optional `meta` object. We only read those two fields, so a narrowing
+    // type is enough — no need to pull in the full Prisma error class.
     if (err.constructor.name === "PrismaClientKnownRequestError") {
-      const prismaErr = err as any;
+      const prismaErr = err as Error & { code?: string; meta?: unknown };
       if (prismaErr.code === "P2002") {
         statusCode = 409;
         code = "CONFLICT";
@@ -62,12 +64,15 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   if (isInternal) {
     log.error({ err, statusCode, code }, `${req.method} ${req.path} >> ${statusCode} ${code}`);
   } else {
-    log.warn({ statusCode, code, details }, `${req.method} ${req.path} >> ${statusCode} ${code}: ${message}`);
+    log.warn(
+      { statusCode, code, details },
+      `${req.method} ${req.path} >> ${statusCode} ${code}: ${message}`,
+    );
   }
 
   // 3. Send Response
   const isProduction = process.env.NODE_ENV === "production";
-  
+
   // In production, hide 500 details
   if (isProduction && isInternal) {
     message = "Internal server error";

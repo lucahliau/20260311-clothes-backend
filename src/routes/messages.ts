@@ -92,7 +92,7 @@ async function assertNotBlockedInConversation(me: string, conversationId: string
 async function unreadCountForMembership(
   conversationId: string,
   userId: string,
-  lastReadAt: Date | null
+  lastReadAt: Date | null,
 ): Promise<number> {
   const since = lastReadAt ?? new Date(0);
   return prisma.message.count({
@@ -175,7 +175,7 @@ function serializeMessage(
       sourceUrl: string | null;
     } | null;
   },
-  viewerId: string
+  viewerId: string,
 ) {
   if (m.deletedAt) {
     return {
@@ -278,7 +278,7 @@ router.get("/conversations", requireAuth, async (req: Request, res: Response) =>
         lastMessage: lastPreview,
         unreadCount: unread,
       };
-    })
+    }),
   );
 
   res.json({ total, items });
@@ -358,12 +358,7 @@ router.post("/conversations", requireAuth, async (req: Request, res: Response) =
       otherUser: other ? previewUser(other) : null,
     });
   } catch (e: unknown) {
-    if (
-      e &&
-      typeof e === "object" &&
-      "code" in e &&
-      (e as { code?: string }).code === "P2002"
-    ) {
+    if (e && typeof e === "object" && "code" in e && (e as { code?: string }).code === "P2002") {
       const conv = await prisma.conversation.findUnique({
         where: { pairKey },
         include: {
@@ -483,7 +478,7 @@ router.get(
       nextCursor,
       hasMore,
     });
-  }
+  },
 );
 
 // ---------------------------------------------------------------------------
@@ -567,7 +562,7 @@ router.post(
     }
 
     res.status(201).json({ message: serializeMessage(message, me) });
-  }
+  },
 );
 
 // ---------------------------------------------------------------------------
@@ -591,7 +586,7 @@ router.patch(
     });
 
     res.json({ readAt: now.toISOString() });
-  }
+  },
 );
 
 // ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ import crypto from "crypto";
 import { prisma } from "./prisma.js";
 
 export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-export const ROTATION_GRACE_MS = 60 * 1000;                   // 60 seconds
+export const ROTATION_GRACE_MS = 60 * 1000; // 60 seconds
 
 export interface RefreshTokenPair {
   raw: string;
@@ -38,10 +38,7 @@ export function nextExpiresAt(now: Date = new Date()): Date {
 }
 
 /** True if a session's previous token is still within the rotation grace. */
-export function withinRotationGrace(
-  rotatedAt: Date | null,
-  now: Date = new Date(),
-): boolean {
+export function withinRotationGrace(rotatedAt: Date | null, now: Date = new Date()): boolean {
   if (!rotatedAt) return false;
   return now.getTime() - rotatedAt.getTime() <= ROTATION_GRACE_MS;
 }
@@ -167,10 +164,7 @@ export async function deleteSessionByRefreshHash(hash: string): Promise<number> 
   return count;
 }
 
-export async function deleteSessionForDevice(
-  userId: string,
-  deviceId: string,
-): Promise<number> {
+export async function deleteSessionForDevice(userId: string, deviceId: string): Promise<number> {
   const { count } = await prisma.session.deleteMany({
     where: { userId, deviceId },
   });

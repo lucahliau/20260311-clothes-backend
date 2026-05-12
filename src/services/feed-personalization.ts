@@ -28,13 +28,13 @@ const LIKE_WEIGHT = 1.0;
 const CANDIDATES_PER_CLUSTER = 80;
 const W_CLUSTER = 1.0;
 const W_DISLIKE = 0.3;
-const W_BRAND = 0.10;
+const W_BRAND = 0.1;
 const W_STYLE = 0.05;
-const STYLE_MATCH_CAP = 3;       // cap |tags ∩ stylePreferences| contribution
+const STYLE_MATCH_CAP = 3; // cap |tags ∩ stylePreferences| contribution
 const JITTER_RANGE = 0.05;
 
 // Exploration mix
-const PERSONALIZED_FRACTION = 0.70;
+const PERSONALIZED_FRACTION = 0.7;
 const NOVELTY_FRACTION = 0.15;
 // remainder is pure random
 
@@ -87,14 +87,8 @@ function recencyWeight(createdAt: Date, now: number): number {
   return Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
 }
 
-function buildItemFilterSql(
-  excludeIds: string[],
-  filters: FeedFilters,
-): Prisma.Sql[] {
-  const clauses: Prisma.Sql[] = [
-    Prisma.sql`ci.active = true`,
-    Prisma.sql`ci."hasNobg" = true`,
-  ];
+function buildItemFilterSql(excludeIds: string[], filters: FeedFilters): Prisma.Sql[] {
+  const clauses: Prisma.Sql[] = [Prisma.sql`ci.active = true`, Prisma.sql`ci."hasNobg" = true`];
   if (excludeIds.length > 0) {
     clauses.push(Prisma.sql`ci.id NOT IN (${Prisma.join(excludeIds)})`);
   }
@@ -156,9 +150,7 @@ async function buildUserClusters(userId: string): Promise<UserClusters> {
   }));
 
   // Dislike centroid (single vector; weighted mean of recent DISLIKEs).
-  const dislikeRows = await prisma.$queryRaw<
-    { createdAt: Date; vector: string }[]
-  >`
+  const dislikeRows = await prisma.$queryRaw<{ createdAt: Date; vector: string }[]>`
     SELECT s."createdAt", ie.vector::text AS vector
     FROM "Swipe" s
     JOIN "ItemEmbedding" ie
@@ -209,7 +201,7 @@ async function getUserClusters(userId: string): Promise<UserClusters> {
 type Candidate = {
   itemId: string;
   clusterIndex: number;
-  clusterSim: number;       // 1 - cosine distance (higher = more similar)
+  clusterSim: number; // 1 - cosine distance (higher = more similar)
 };
 
 async function retrieveCandidatesPerCluster(
@@ -312,10 +304,7 @@ export function scoreCandidates(
  * candidate from each. Guarantees every interest gets representation before
  * the strongest cluster takes a second slot.
  */
-export function roundRobinByCluster(
-  scored: ScoredCandidate[],
-  limit: number,
-): ScoredCandidate[] {
+export function roundRobinByCluster(scored: ScoredCandidate[], limit: number): ScoredCandidate[] {
   const byCluster = new Map<number, ScoredCandidate[]>();
   for (const c of scored) {
     if (!byCluster.has(c.clusterIndex)) byCluster.set(c.clusterIndex, []);
@@ -500,9 +489,7 @@ export type BuildFeedArgs = {
   filters: FeedFilters;
 };
 
-export async function buildPersonalizedFeed(
-  args: BuildFeedArgs,
-): Promise<ClothingItem[]> {
+export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<ClothingItem[]> {
   const { userId, limit, filters } = args;
 
   // Excluded items: previously-swiped (cap 1000 most recent).
@@ -533,11 +520,7 @@ export async function buildPersonalizedFeed(
   const nRandom = Math.max(0, limit - nPersonalized - nNovelty);
 
   // 1. Candidate retrieval per cluster.
-  const candidates = await retrieveCandidatesPerCluster(
-    clusterState.clusters,
-    excludeIds,
-    filters,
-  );
+  const candidates = await retrieveCandidatesPerCluster(clusterState.clusters, excludeIds, filters);
   if (candidates.length === 0) {
     return coldStartFeed(user, excludeIds, filters, limit);
   }

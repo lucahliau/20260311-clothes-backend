@@ -41,12 +41,9 @@ describe("sphericalKMeans", () => {
     const aPts = Array.from({ length: 5 }, () => v([1, 0, 0]));
     const bPts = Array.from({ length: 5 }, () => v([0, 1, 0]));
     const weights = [1, 1, 1, 1, 1, 5, 5, 5, 5, 5];
-    const { weights: clusterWeights } = sphericalKMeans(
-      [...aPts, ...bPts],
-      2,
-      weights,
-      { seed: 1 },
-    );
+    const { weights: clusterWeights } = sphericalKMeans([...aPts, ...bPts], 2, weights, {
+      seed: 1,
+    });
     const max = Math.max(...clusterWeights);
     const min = Math.min(...clusterWeights);
     expect(max).toBeGreaterThan(min);

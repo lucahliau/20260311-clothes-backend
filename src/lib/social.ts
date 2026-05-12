@@ -21,10 +21,7 @@ export type UserBlockRow = { blockerId: string; blockedId: string };
  *
  * Self IDs are stripped defensively in case a self-block row ever slips in.
  */
-export function blockedUserIdsFromRows(
-  userId: string,
-  rows: UserBlockRow[],
-): Set<string> {
+export function blockedUserIdsFromRows(userId: string, rows: UserBlockRow[]): Set<string> {
   const set = new Set<string>();
   for (const r of rows) {
     if (r.blockerId !== userId) set.add(r.blockerId);

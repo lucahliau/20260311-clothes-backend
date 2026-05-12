@@ -4,29 +4,29 @@ Set these on the Railway service (Variables). Redeploy after changes if the plat
 
 ## Required for API + password reset emails
 
-| Variable | Example | Notes |
-|----------|---------|--------|
-| `APP_URL` | `https://20260311-clothes-backend-production.up.railway.app` | Public HTTPS origin of **this** service. No trailing slash. Used in forgot-password email links and must match Universal Links host. |
-| `NODE_ENV` | `production` | Enables production CORS behavior and trust proxy when set. |
-| `DATABASE_URL` | (from Supabase or Postgres) | |
-| `JWT_SECRET` | (long random string) | |
-| `JWT_REFRESH_SECRET` | (long random string) | |
-| `RESEND_API_KEY` | `re_...` | Required for sending email. |
-| `RESEND_FROM_EMAIL` | `onboarding@resend.dev` or `Name <noreply@yourdomain.com>` | Defaults to `onboarding@resend.dev` (Resend test sender). For production, use an address on a **verified domain** in the Resend dashboard. |
+| Variable             | Example                                                      | Notes                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `APP_URL`            | `https://20260311-clothes-backend-production.up.railway.app` | Public HTTPS origin of **this** service. No trailing slash. Used in forgot-password email links and must match Universal Links host.       |
+| `NODE_ENV`           | `production`                                                 | Enables production CORS behavior and trust proxy when set.                                                                                 |
+| `DATABASE_URL`       | (from Supabase or Postgres)                                  |                                                                                                                                            |
+| `JWT_SECRET`         | (long random string)                                         |                                                                                                                                            |
+| `JWT_REFRESH_SECRET` | (long random string)                                         |                                                                                                                                            |
+| `RESEND_API_KEY`     | `re_...`                                                     | Required for sending email.                                                                                                                |
+| `RESEND_FROM_EMAIL`  | `onboarding@resend.dev` or `Name <noreply@yourdomain.com>`   | Defaults to `onboarding@resend.dev` (Resend test sender). For production, use an address on a **verified domain** in the Resend dashboard. |
 
 If Resend rejects the send (invalid `from`, unverified domain, etc.), `POST /auth/forgot-password` returns **503** with `EMAIL_SEND_FAILED` instead of a silent 200.
 
 ## Universal Links (AASA)
 
-| Variable | Notes |
-|----------|--------|
-| `APPLE_UNIVERSAL_LINK_APP_ID` | `TeamID.bundleIdentifier`, **or** |
+| Variable                          | Notes                                  |
+| --------------------------------- | -------------------------------------- |
+| `APPLE_UNIVERSAL_LINK_APP_ID`     | `TeamID.bundleIdentifier`, **or**      |
 | `APNS_TEAM_ID` + `APNS_BUNDLE_ID` | Combined as `TeamID.bundleId` for AASA |
 
 ## CORS (if a browser calls this API)
 
-| Variable | Example |
-|----------|---------|
+| Variable      | Example                                            |
+| ------------- | -------------------------------------------------- |
 | `CORS_ORIGIN` | `https://your-web-app.com` or comma-separated list |
 
 Native iOS apps using `URLSession` typically do not need CORS.

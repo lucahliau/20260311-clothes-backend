@@ -36,9 +36,7 @@ const envSchema = z.object({
   SENTRY_DSN: z.string().optional(),
   SENTRY_ENVIRONMENT: z.string().optional(),
   SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0),
-  LOG_LEVEL: z
-    .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
-    .optional(),
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

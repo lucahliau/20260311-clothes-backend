@@ -106,11 +106,17 @@ router.post("/follow/:userId", requireAuth, async (req: Request, res: Response) 
       where: { id: me },
       select: { username: true },
     });
-    await notifySocialEvent(targetId, {
-      title: "New follow request",
-      body: actor?.username ? `@${actor.username} wants to follow you` : "Someone wants to follow you",
-      data: { type: "follow_request", followerId: me },
-    }, me);
+    await notifySocialEvent(
+      targetId,
+      {
+        title: "New follow request",
+        body: actor?.username
+          ? `@${actor.username} wants to follow you`
+          : "Someone wants to follow you",
+        data: { type: "follow_request", followerId: me },
+      },
+      me,
+    );
   }
 
   res.status(201).json({
@@ -142,70 +148,84 @@ router.delete("/follow/:userId", requireAuth, async (req: Request, res: Response
 // POST /social/follow-requests/:followerId/accept
 // ---------------------------------------------------------------------------
 
-router.post("/follow-requests/:followerId/accept", requireAuth, async (req: Request, res: Response) => {
-  const followerId = req.params.followerId as string;
-  const me = req.user!.userId;
+router.post(
+  "/follow-requests/:followerId/accept",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const followerId = req.params.followerId as string;
+    const me = req.user!.userId;
 
-  if (followerId === me) {
-    throw new AppError(400, "BAD_REQUEST", "Invalid follower");
-  }
+    if (followerId === me) {
+      throw new AppError(400, "BAD_REQUEST", "Invalid follower");
+    }
 
-  const row = await prisma.follow.findUnique({
-    where: { followerId_followeeId: { followerId, followeeId: me } },
-  });
+    const row = await prisma.follow.findUnique({
+      where: { followerId_followeeId: { followerId, followeeId: me } },
+    });
 
-  if (!row || row.status !== "PENDING") {
-    throw new AppError(404, "NOT_FOUND", "No pending follow request from this user");
-  }
+    if (!row || row.status !== "PENDING") {
+      throw new AppError(404, "NOT_FOUND", "No pending follow request from this user");
+    }
 
-  // Defense-in-depth: blocking deletes pending rows in a transaction, so this
-  // path is only reachable if that cleanup raced or future code skipped it.
-  // Refuse the accept and clean up the stale row.
-  if (await checkBlockedPair(me, followerId)) {
-    await prisma.follow.delete({ where: { id: row.id } });
-    throw new AppError(403, "BLOCKED", "You cannot interact with this user");
-  }
+    // Defense-in-depth: blocking deletes pending rows in a transaction, so this
+    // path is only reachable if that cleanup raced or future code skipped it.
+    // Refuse the accept and clean up the stale row.
+    if (await checkBlockedPair(me, followerId)) {
+      await prisma.follow.delete({ where: { id: row.id } });
+      throw new AppError(403, "BLOCKED", "You cannot interact with this user");
+    }
 
-  const follow = await prisma.follow.update({
-    where: { id: row.id },
-    data: { status: "ACCEPTED", respondedAt: new Date() },
-  });
+    const follow = await prisma.follow.update({
+      where: { id: row.id },
+      data: { status: "ACCEPTED", respondedAt: new Date() },
+    });
 
-  const accepter = await prisma.user.findUnique({
-    where: { id: me },
-    select: { username: true },
-  });
-  await notifySocialEvent(followerId, {
-    title: "Follow request accepted",
-    body: accepter?.username ? `@${accepter.username} accepted your follow request` : "Your follow request was accepted",
-    data: { type: "follow_accepted", followeeId: me },
-  }, me);
+    const accepter = await prisma.user.findUnique({
+      where: { id: me },
+      select: { username: true },
+    });
+    await notifySocialEvent(
+      followerId,
+      {
+        title: "Follow request accepted",
+        body: accepter?.username
+          ? `@${accepter.username} accepted your follow request`
+          : "Your follow request was accepted",
+        data: { type: "follow_accepted", followeeId: me },
+      },
+      me,
+    );
 
-  res.json({ follow });
-});
+    res.json({ follow });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /social/follow-requests/:followerId/reject
 // ---------------------------------------------------------------------------
 
-router.post("/follow-requests/:followerId/reject", requireAuth, async (req: Request, res: Response) => {
-  const followerId = req.params.followerId as string;
-  const me = req.user!.userId;
+router.post(
+  "/follow-requests/:followerId/reject",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const followerId = req.params.followerId as string;
+    const me = req.user!.userId;
 
-  if (followerId === me) {
-    throw new AppError(400, "BAD_REQUEST", "Invalid follower");
-  }
+    if (followerId === me) {
+      throw new AppError(400, "BAD_REQUEST", "Invalid follower");
+    }
 
-  const deleted = await prisma.follow.deleteMany({
-    where: { followerId, followeeId: me, status: "PENDING" },
-  });
+    const deleted = await prisma.follow.deleteMany({
+      where: { followerId, followeeId: me, status: "PENDING" },
+    });
 
-  if (deleted.count === 0) {
-    throw new AppError(404, "NOT_FOUND", "No pending follow request from this user");
-  }
+    if (deleted.count === 0) {
+      throw new AppError(404, "NOT_FOUND", "No pending follow request from this user");
+    }
 
-  res.json({ rejected: true });
-});
+    res.json({ rejected: true });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /social/friends/request/:userId
@@ -226,7 +246,11 @@ router.post("/friends/request/:userId", requireAuth, async (req: Request, res: R
     where: { fromUserId_toUserId: { fromUserId: targetId, toUserId: me } },
   });
   if (reversePending?.status === "PENDING") {
-    throw new AppError(409, "CONFLICT", "This user already sent you a friend request — accept or decline it first");
+    throw new AppError(
+      409,
+      "CONFLICT",
+      "This user already sent you a friend request — accept or decline it first",
+    );
   }
 
   const existing = await prisma.friendRequest.findUnique({
@@ -258,11 +282,17 @@ router.post("/friends/request/:userId", requireAuth, async (req: Request, res: R
     where: { id: me },
     select: { username: true },
   });
-  await notifySocialEvent(targetId, {
-    title: "New friend request",
-    body: actor?.username ? `@${actor.username} sent you a friend request` : "You have a new friend request",
-    data: { type: "friend_request", fromUserId: me },
-  }, me);
+  await notifySocialEvent(
+    targetId,
+    {
+      title: "New friend request",
+      body: actor?.username
+        ? `@${actor.username} sent you a friend request`
+        : "You have a new friend request",
+      data: { type: "friend_request", fromUserId: me },
+    },
+    me,
+  );
 
   res.status(201).json({ friendRequest });
 });
@@ -286,68 +316,82 @@ router.delete("/friends/request/:userId", requireAuth, async (req: Request, res:
 // POST /social/friends/requests/:fromUserId/accept
 // ---------------------------------------------------------------------------
 
-router.post("/friends/requests/:fromUserId/accept", requireAuth, async (req: Request, res: Response) => {
-  const fromUserId = req.params.fromUserId as string;
-  const me = req.user!.userId;
+router.post(
+  "/friends/requests/:fromUserId/accept",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const fromUserId = req.params.fromUserId as string;
+    const me = req.user!.userId;
 
-  if (fromUserId === me) {
-    throw new AppError(400, "BAD_REQUEST", "Invalid request");
-  }
+    if (fromUserId === me) {
+      throw new AppError(400, "BAD_REQUEST", "Invalid request");
+    }
 
-  const row = await prisma.friendRequest.findUnique({
-    where: { fromUserId_toUserId: { fromUserId, toUserId: me } },
-  });
+    const row = await prisma.friendRequest.findUnique({
+      where: { fromUserId_toUserId: { fromUserId, toUserId: me } },
+    });
 
-  if (!row || row.status !== "PENDING") {
-    throw new AppError(404, "NOT_FOUND", "No pending friend request from this user");
-  }
+    if (!row || row.status !== "PENDING") {
+      throw new AppError(404, "NOT_FOUND", "No pending friend request from this user");
+    }
 
-  if (await checkBlockedPair(me, fromUserId)) {
-    await prisma.friendRequest.delete({ where: { id: row.id } });
-    throw new AppError(403, "BLOCKED", "You cannot interact with this user");
-  }
+    if (await checkBlockedPair(me, fromUserId)) {
+      await prisma.friendRequest.delete({ where: { id: row.id } });
+      throw new AppError(403, "BLOCKED", "You cannot interact with this user");
+    }
 
-  const friendRequest = await prisma.friendRequest.update({
-    where: { id: row.id },
-    data: { status: "ACCEPTED" satisfies FriendRequestStatus },
-  });
+    const friendRequest = await prisma.friendRequest.update({
+      where: { id: row.id },
+      data: { status: "ACCEPTED" satisfies FriendRequestStatus },
+    });
 
-  const accepter = await prisma.user.findUnique({
-    where: { id: me },
-    select: { username: true },
-  });
-  await notifySocialEvent(fromUserId, {
-    title: "Friend request accepted",
-    body: accepter?.username ? `@${accepter.username} accepted your friend request` : "Your friend request was accepted",
-    data: { type: "friend_accepted", toUserId: me },
-  }, me);
+    const accepter = await prisma.user.findUnique({
+      where: { id: me },
+      select: { username: true },
+    });
+    await notifySocialEvent(
+      fromUserId,
+      {
+        title: "Friend request accepted",
+        body: accepter?.username
+          ? `@${accepter.username} accepted your friend request`
+          : "Your friend request was accepted",
+        data: { type: "friend_accepted", toUserId: me },
+      },
+      me,
+    );
 
-  res.json({ friendRequest });
-});
+    res.json({ friendRequest });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /social/friends/requests/:fromUserId/decline
 // ---------------------------------------------------------------------------
 
-router.post("/friends/requests/:fromUserId/decline", requireAuth, async (req: Request, res: Response) => {
-  const fromUserId = req.params.fromUserId as string;
-  const me = req.user!.userId;
+router.post(
+  "/friends/requests/:fromUserId/decline",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const fromUserId = req.params.fromUserId as string;
+    const me = req.user!.userId;
 
-  const row = await prisma.friendRequest.findUnique({
-    where: { fromUserId_toUserId: { fromUserId, toUserId: me } },
-  });
+    const row = await prisma.friendRequest.findUnique({
+      where: { fromUserId_toUserId: { fromUserId, toUserId: me } },
+    });
 
-  if (!row || row.status !== "PENDING") {
-    throw new AppError(404, "NOT_FOUND", "No pending friend request from this user");
-  }
+    if (!row || row.status !== "PENDING") {
+      throw new AppError(404, "NOT_FOUND", "No pending friend request from this user");
+    }
 
-  await prisma.friendRequest.update({
-    where: { id: row.id },
-    data: { status: "DECLINED" },
-  });
+    await prisma.friendRequest.update({
+      where: { id: row.id },
+      data: { status: "DECLINED" },
+    });
 
-  res.json({ declined: true });
-});
+    res.json({ declined: true });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // DELETE /social/friends/:userId — end friendship

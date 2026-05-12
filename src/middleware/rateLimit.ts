@@ -5,7 +5,9 @@ export const globalLimiter = rateLimit({
   limit: 100,
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  message: { error: { code: "RATE_LIMITED", message: "Too many requests, please try again later" } },
+  message: {
+    error: { code: "RATE_LIMITED", message: "Too many requests, please try again later" },
+  },
 });
 
 export const authLimiter = rateLimit({
@@ -13,7 +15,9 @@ export const authLimiter = rateLimit({
   limit: 10,
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  message: { error: { code: "RATE_LIMITED", message: "Too many attempts, please try again later" } },
+  message: {
+    error: { code: "RATE_LIMITED", message: "Too many attempts, please try again later" },
+  },
 });
 
 export const searchLimiter = rateLimit({

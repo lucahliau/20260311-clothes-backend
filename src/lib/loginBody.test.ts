@@ -8,21 +8,25 @@ describe("normalizeLoginBody", () => {
   });
 
   it("unwraps nested user", () => {
-    expect(
-      normalizeLoginBody({ user: { email: "a@b.com", password: "secret" } })
-    ).toEqual({ email: "a@b.com", password: "secret" });
+    expect(normalizeLoginBody({ user: { email: "a@b.com", password: "secret" } })).toEqual({
+      email: "a@b.com",
+      password: "secret",
+    });
   });
 
   it("unwraps nested credentials", () => {
-    expect(
-      normalizeLoginBody({ credentials: { email: "a@b.com", password: "secret" } })
-    ).toEqual({ email: "a@b.com", password: "secret" });
+    expect(normalizeLoginBody({ credentials: { email: "a@b.com", password: "secret" } })).toEqual({
+      email: "a@b.com",
+      password: "secret",
+    });
   });
 
   it("maps username to email when it looks like an email", () => {
-    expect(
-      normalizeLoginBody({ username: "a@b.com", password: "secret" })
-    ).toEqual({ username: "a@b.com", password: "secret", email: "a@b.com" });
+    expect(normalizeLoginBody({ username: "a@b.com", password: "secret" })).toEqual({
+      username: "a@b.com",
+      password: "secret",
+      email: "a@b.com",
+    });
   });
 });
 

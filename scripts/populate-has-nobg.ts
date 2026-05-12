@@ -37,7 +37,7 @@ async function main() {
         if (!nobgUrl) return { item, hasNobg: false, reason: "no-path" as const };
         const exists = await nobgExists(nobgUrl);
         return { item, hasNobg: exists, reason: exists ? "ok" : ("404" as const) };
-      })
+      }),
     );
 
     for (const r of results) {
@@ -63,7 +63,9 @@ async function main() {
     }
 
     const pct = Math.round(((i + batch.length) / items.length) * 100);
-    process.stdout.write(`\r  Progress: ${i + batch.length}/${items.length} (${pct}%) | hasNobg: ${updated} | no path: ${noPath} | 404: ${missing}    `);
+    process.stdout.write(
+      `\r  Progress: ${i + batch.length}/${items.length} (${pct}%) | hasNobg: ${updated} | no path: ${noPath} | 404: ${missing}    `,
+    );
   }
 
   console.log("\n\n--- Summary ---");

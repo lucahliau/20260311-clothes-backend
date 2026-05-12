@@ -35,11 +35,13 @@ async function main() {
         if (!nobgUrl) return { item, nobgUrl: null as string | null, exists: false };
         const exists = await nobgExists(nobgUrl);
         return { item, nobgUrl, exists };
-      })
+      }),
     );
     results.push(...batchResults);
     if ((i + BATCH_SIZE) % 500 === 0 || i + BATCH_SIZE >= items.length) {
-      process.stdout.write(`  Progress: ${Math.min(i + BATCH_SIZE, items.length)}/${items.length}\r`);
+      process.stdout.write(
+        `  Progress: ${Math.min(i + BATCH_SIZE, items.length)}/${items.length}\r`,
+      );
     }
   }
 

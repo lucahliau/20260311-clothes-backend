@@ -126,14 +126,9 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     orderBy: { createdAt: "desc" },
     take: MAX_EXCLUDE_IDS,
   });
-  const excludeIds = swipedItemIds
-    .map((s) => s.itemId)
-    .filter((id) => UUID_REGEX.test(id));
+  const excludeIds = swipedItemIds.map((s) => s.itemId).filter((id) => UUID_REGEX.test(id));
 
-  const sqlWhere: Prisma.Sql[] = [
-    Prisma.sql`active = true`,
-    Prisma.sql`"hasNobg" = true`,
-  ];
+  const sqlWhere: Prisma.Sql[] = [Prisma.sql`active = true`, Prisma.sql`"hasNobg" = true`];
   if (excludeIds.length > 0) {
     sqlWhere.push(Prisma.sql`id NOT IN (${Prisma.join(excludeIds)})`);
   }

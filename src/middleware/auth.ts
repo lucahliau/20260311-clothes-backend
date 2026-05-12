@@ -8,6 +8,10 @@ export interface AuthPayload {
 }
 
 declare global {
+  // Standard Express declaration-merging pattern — TypeScript requires the
+  // namespace shape here, so suppress the lint rule that warns against
+  // namespaces in user code.
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       user?: AuthPayload;

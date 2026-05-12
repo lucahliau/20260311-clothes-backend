@@ -217,7 +217,7 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
   if (!parsed.success) {
     const empty = Object.keys(raw as Record<string, unknown>).length === 0;
     const message = empty
-      ? "Request body is empty or could not be parsed. Send Content-Type: application/json with {\"email\":\"...\",\"password\":\"...\"}, or application/x-www-form-urlencoded with the same fields."
+      ? 'Request body is empty or could not be parsed. Send Content-Type: application/json with {"email":"...","password":"..."}, or application/x-www-form-urlencoded with the same fields.'
       : "Validation failed";
     throw new AppError(400, "VALIDATION_ERROR", message, parsed.error.flatten().fieldErrors);
   }
@@ -236,7 +236,7 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
 
   const deviceIdRaw =
     typeof (raw as { deviceId?: unknown }).deviceId === "string"
-      ? ((raw as { deviceId: string }).deviceId)
+      ? (raw as { deviceId: string }).deviceId
       : undefined;
   const session = await upsertSessionForLogin({
     userId: user.id,
@@ -377,7 +377,7 @@ router.post("/reset-password", async (req: Request, res: Response) => {
   if (!user) {
     req.log.warn(
       { tokenHashPrefix: hash.slice(0, 8) },
-      "[auth] POST /auth/reset-password: invalid or expired token"
+      "[auth] POST /auth/reset-password: invalid or expired token",
     );
     throw new AppError(400, "BAD_REQUEST", "Invalid or expired reset token");
   }

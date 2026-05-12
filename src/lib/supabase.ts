@@ -39,14 +39,12 @@ function getClient(): SupabaseClient {
 
 export async function createAvatarUploadUrl(
   userId: string,
-  fileExt: string = "jpg"
+  fileExt: string = "jpg",
 ): Promise<{ signedUrl: string; publicUrl: string; path: string }> {
   const client = getClient();
   const path = `${userId}/avatar-${Date.now()}.${fileExt}`;
 
-  const { data, error } = await client.storage
-    .from(AVATAR_BUCKET)
-    .createSignedUploadUrl(path);
+  const { data, error } = await client.storage.from(AVATAR_BUCKET).createSignedUploadUrl(path);
 
   if (error || !data) {
     throw new Error(`Failed to create upload URL: ${error?.message ?? "unknown error"}`);

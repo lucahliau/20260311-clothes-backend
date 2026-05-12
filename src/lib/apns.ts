@@ -89,7 +89,7 @@ export function classifyApnsResponse(status: number, reason: string | null): Apn
 
 export async function sendPushNotification(
   deviceToken: string,
-  payload: PushPayload
+  payload: PushPayload,
 ): Promise<SendResult> {
   const { APNS_BUNDLE_ID } = env();
   if (!APNS_BUNDLE_ID) {
@@ -189,10 +189,7 @@ async function applyRetry(token: string): Promise<void> {
  * writes are best-effort — if a write throws, the push has still succeeded
  * for the caller's purposes.
  */
-export async function sendPushToUser(
-  userId: string,
-  payload: PushPayload,
-): Promise<void> {
+export async function sendPushToUser(userId: string, payload: PushPayload): Promise<void> {
   const tokens = await prisma.deviceToken.findMany({
     where: { userId },
     select: { token: true },
@@ -225,7 +222,7 @@ export async function sendPushToUser(
           // suppress: our config/payload bug — surface it, but don't touch the token.
           logger.warn(
             { status: result.statusCode, reason: result.reason },
-            "[APNs] Suppressed push failure (config/payload)"
+            "[APNs] Suppressed push failure (config/payload)",
           );
         }
       } catch (err) {

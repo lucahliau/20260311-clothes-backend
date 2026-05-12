@@ -22,7 +22,10 @@ const updateProfileSchema = z
     firstName: z.string().max(100).optional(),
     lastName: z.string().max(100).optional(),
     avatarUrl: z.string().url().optional(),
-    dateOfBirth: z.string().transform((s) => new Date(s)).optional(),
+    dateOfBirth: z
+      .string()
+      .transform((s) => new Date(s))
+      .optional(),
     gender: z.string().max(50).optional(),
     location: z.string().max(200).optional(),
     bio: z.string().max(500).optional(),
@@ -102,7 +105,13 @@ async function buildRelationship(viewerId: string | undefined, targetId: string)
   ]);
 
   const mapFollow = (row: { status: string } | null) =>
-    !row ? "none" : row.status === "ACCEPTED" ? "accepted" : row.status === "PENDING" ? "pending" : "none";
+    !row
+      ? "none"
+      : row.status === "ACCEPTED"
+        ? "accepted"
+        : row.status === "PENDING"
+          ? "pending"
+          : "none";
 
   let friendship: "none" | "pending_out" | "pending_in" | "friends" = "none";
   if (friendRow) {
@@ -330,8 +339,7 @@ router.get("/:username", optionalAuth, async (req: Request, res: Response) => {
     relationship?.followAsViewer === "accepted" || relationship?.followFromTarget === "accepted";
   const isFriend = relationship?.friendship === "friends";
 
-  const canSeeFull =
-    isSelf || !target.profileIsPrivate || followAccepted || isFriend;
+  const canSeeFull = isSelf || !target.profileIsPrivate || followAccepted || isFriend;
 
   const full = {
     id: target.id,

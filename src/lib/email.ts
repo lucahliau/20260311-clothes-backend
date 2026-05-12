@@ -35,7 +35,7 @@ export async function sendPasswordResetEmail(to: string, resetUrl: string) {
   if (result.error) {
     logger.error(
       { resendErrorName: result.error.name, resendErrorMessage: result.error.message },
-      "[Resend] email send failed"
+      "[Resend] email send failed",
     );
     throw new AppError(503, "EMAIL_SEND_FAILED", "Could not send password reset email");
   }

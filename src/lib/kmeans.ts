@@ -26,9 +26,9 @@ export function dot(a: Vector, b: Vector): number {
 }
 
 export interface SphericalKMeansResult {
-  centroids: Vector[];      // L2-normalized
-  assignments: number[];    // length = points.length, value in [0, K)
-  weights: number[];        // summed point weight per cluster
+  centroids: Vector[]; // L2-normalized
+  assignments: number[]; // length = points.length, value in [0, K)
+  weights: number[]; // summed point weight per cluster
 }
 
 export interface SphericalKMeansOptions {
@@ -77,7 +77,10 @@ function kmeansPlusPlusInit(
     let pick = n - 1;
     for (let i = 0; i < n; i++) {
       r -= probs[i]!;
-      if (r <= 0) { pick = i; break; }
+      if (r <= 0) {
+        pick = i;
+        break;
+      }
     }
     const c = points[pick]!;
     centers.push(c);
@@ -104,13 +107,13 @@ export function sphericalKMeans(
   const maxIters = opts.maxIters ?? 25;
   const rand = lcg(opts.seed ?? 1);
 
-  let centroids = kmeansPlusPlusInit(points, w, effectiveK, rand);
+  const centroids = kmeansPlusPlusInit(points, w, effectiveK, rand);
   // Pad if init returned fewer than k (n < k or degenerate weights).
   while (centroids.length < effectiveK) {
     centroids.push(points[Math.floor(rand() * n)]!);
   }
 
-  let assignments = new Array<number>(n).fill(0);
+  const assignments = new Array<number>(n).fill(0);
 
   for (let iter = 0; iter < maxIters; iter++) {
     let changed = false;
@@ -120,7 +123,10 @@ export function sphericalKMeans(
       let bestSim = -Infinity;
       for (let c = 0; c < effectiveK; c++) {
         const s = dot(points[i]!, centroids[c]!);
-        if (s > bestSim) { bestSim = s; best = c; }
+        if (s > bestSim) {
+          bestSim = s;
+          best = c;
+        }
       }
       if (assignments[i] !== best) {
         assignments[i] = best;
@@ -140,7 +146,7 @@ export function sphericalKMeans(
       for (let d = 0; d < dim; d++) sum[d] = sum[d]! + p[d]! * wi;
     }
     for (let c = 0; c < effectiveK; c++) {
-      if (counts[c] === 0) continue;        // empty cluster: keep old centroid
+      if (counts[c] === 0) continue; // empty cluster: keep old centroid
       centroids[c] = normalize(sums[c]!);
     }
 

@@ -48,7 +48,9 @@ function escapeHtml(s: string): string {
 }
 
 /** HTML fallback when the reset email link opens in a browser instead of the app. */
-function resetPasswordFallbackHtml(opts: { email: string; token: string } | { reason: "no-token" | "invalid" }) {
+function resetPasswordFallbackHtml(
+  opts: { email: string; token: string } | { reason: "no-token" | "invalid" },
+) {
   if ("reason" in opts) {
     const msg =
       opts.reason === "no-token"
@@ -202,8 +204,8 @@ app.use(
   cors(
     env().NODE_ENV === "production"
       ? { origin: process.env.CORS_ORIGIN?.split(",") ?? [], credentials: true }
-      : { origin: true, credentials: true }
-  )
+      : { origin: true, credentials: true },
+  ),
 );
 
 // Per-request JSON logger. Replaces morgan and emits one structured line per
@@ -234,7 +236,7 @@ app.use(
       }),
       res: (res) => ({ statusCode: res.statusCode }),
     },
-  })
+  }),
 );
 
 app.use(express.json({ limit: "1mb" }));
@@ -247,7 +249,9 @@ app.get("/health", async (req, res) => {
     res.json({ status: "ok", db: "connected", timestamp: new Date().toISOString() });
   } catch (err) {
     req.log.error({ err }, "Health check failed: DB unreachable");
-    res.status(503).json({ status: "error", db: "disconnected", timestamp: new Date().toISOString() });
+    res
+      .status(503)
+      .json({ status: "error", db: "disconnected", timestamp: new Date().toISOString() });
   }
 });
 
@@ -291,7 +295,10 @@ app.get("/reset-password", async (req, res, next) => {
     });
 
     if (!user) {
-      req.log.warn({ hashPrefix: hash.slice(0, 8) }, "Password reset: no matching user or token expired");
+      req.log.warn(
+        { hashPrefix: hash.slice(0, 8) },
+        "Password reset: no matching user or token expired",
+      );
       res.type("html").send(resetPasswordFallbackHtml({ reason: "invalid" }));
       return;
     }
@@ -326,8 +333,5 @@ app.use(errorHandler);
 const PORT = env().PORT;
 app.listen(PORT, () => {
   const e = env();
-  logger.info(
-    { port: PORT, appUrl: e.APP_URL, env: e.NODE_ENV },
-    "Server listening"
-  );
+  logger.info({ port: PORT, appUrl: e.APP_URL, env: e.NODE_ENV }, "Server listening");
 });

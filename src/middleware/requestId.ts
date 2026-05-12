@@ -11,8 +11,7 @@
 import type { Request, Response, NextFunction } from "express";
 import crypto from "node:crypto";
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Pure resolver: returns the inbound header value when it's a valid UUID,
@@ -26,11 +25,7 @@ export function resolveRequestId(headerValue: unknown): string {
   return crypto.randomUUID();
 }
 
-export function requestIdMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
+export function requestIdMiddleware(req: Request, res: Response, next: NextFunction): void {
   const id = resolveRequestId(req.headers["x-request-id"]);
   req.id = id;
   res.setHeader("x-request-id", id);

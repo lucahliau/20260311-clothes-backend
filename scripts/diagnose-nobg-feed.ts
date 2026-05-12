@@ -71,7 +71,7 @@ async function probeNobgUrl(nobgUrl: string): Promise<{
       return { headStatus, getStatus: null, exists: true };
     }
   } catch {
-    headStatus = null;
+    // fetch failed (TLS, network); headStatus stays null
   }
 
   try {
@@ -208,7 +208,9 @@ async function main() {
 
   const probeBatch = full ? withNobgUrl : withNobgUrl.slice(0, limit);
   console.log(`--- HTTP probe (HEAD then GET Range) ---`);
-  console.log(`Rows with derivable nobgUrl: ${withNobgUrl.length} (checking ${probeBatch.length}${full ? " all" : `, cap ${limit} unless --full`})`);
+  console.log(
+    `Rows with derivable nobgUrl: ${withNobgUrl.length} (checking ${probeBatch.length}${full ? " all" : `, cap ${limit} unless --full`})`,
+  );
 
   let headOk = 0;
   let headFailGetOk = 0;
@@ -227,7 +229,7 @@ async function main() {
       chunk.map(async ({ row, nobgUrl }) => {
         const probe = await probeNobgUrl(nobgUrl);
         return { row, nobgUrl, ...probe };
-      })
+      }),
     );
 
     for (const r of results) {
@@ -246,7 +248,9 @@ async function main() {
       else if (!dbSays && r.exists) dbFalseOrNullButPresent++;
       else dbMatch++;
     }
-    process.stdout.write(`\r  Progress: ${Math.min(i + chunk.length, probeBatch.length)}/${probeBatch.length}`);
+    process.stdout.write(
+      `\r  Progress: ${Math.min(i + chunk.length, probeBatch.length)}/${probeBatch.length}`,
+    );
   }
   console.log("\n");
 
@@ -269,8 +273,12 @@ async function main() {
   console.log(`  DB false/NULL but present:           ${dbFalseOrNullButPresent}`);
   console.log(`  Agreement (or both absent):        ${dbMatch}`);
   console.log("");
-  console.log("If feed-eligible count is 0 but HTTP shows many present, run: npm run populate-has-nobg");
-  console.log("If HEAD fails often but GET ok, ensure nobgExists uses GET fallback (see src/lib/images.ts).");
+  console.log(
+    "If feed-eligible count is 0 but HTTP shows many present, run: npm run populate-has-nobg",
+  );
+  console.log(
+    "If HEAD fails often but GET ok, ensure nobgExists uses GET fallback (see src/lib/images.ts).",
+  );
 }
 
 main()

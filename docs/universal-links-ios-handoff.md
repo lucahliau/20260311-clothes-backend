@@ -25,11 +25,11 @@ Do **not** use `http://localhost:3000` in release builds; that targets a dev ser
 
 Set on the service that runs this API:
 
-| Variable | Example | Notes |
-|----------|---------|--------|
-| `APP_URL` | `https://20260311-clothes-backend-production.up.railway.app` | No trailing slash; must match the public HTTPS origin of this server. |
-| `APPLE_UNIVERSAL_LINK_APP_ID` | `ABCDE12345.com.your.bundle` | Optional if you use the two APNS vars below instead. |
-| `APNS_TEAM_ID` + `APNS_BUNDLE_ID` | | Optional fallback to build app ID for AASA. |
+| Variable                          | Example                                                      | Notes                                                                 |
+| --------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `APP_URL`                         | `https://20260311-clothes-backend-production.up.railway.app` | No trailing slash; must match the public HTTPS origin of this server. |
+| `APPLE_UNIVERSAL_LINK_APP_ID`     | `ABCDE12345.com.your.bundle`                                 | Optional if you use the two APNS vars below instead.                  |
+| `APNS_TEAM_ID` + `APNS_BUNDLE_ID` |                                                              | Optional fallback to build app ID for AASA.                           |
 
 After deploy, verify: `https://<host>/.well-known/apple-app-site-association` returns JSON (not 404).
 

@@ -16,7 +16,10 @@ const MAX_EXPLORE_LIMIT = 100_000;
 // ---------------------------------------------------------------------------
 
 router.get("/explore", async (req: Request, res: Response) => {
-  const limit = Math.min(MAX_EXPLORE_LIMIT, Math.max(1, Number(req.query.limit) || DEFAULT_EXPLORE_LIMIT));
+  const limit = Math.min(
+    MAX_EXPLORE_LIMIT,
+    Math.max(1, Number(req.query.limit) || DEFAULT_EXPLORE_LIMIT),
+  );
 
   const rows = await prisma.$queryRaw<{ brand: string; productCount: bigint }[]>`
     SELECT brand, COUNT(*)::bigint AS "productCount"
@@ -40,7 +43,10 @@ router.get("/explore", async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.get("/", async (req: Request, res: Response) => {
-  const limit = Math.min(MAX_LIST_LIMIT, Math.max(1, Number(req.query.limit) || DEFAULT_LIST_LIMIT));
+  const limit = Math.min(
+    MAX_LIST_LIMIT,
+    Math.max(1, Number(req.query.limit) || DEFAULT_LIST_LIMIT),
+  );
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
 
   const where: Prisma.ClothingItemWhereInput = { active: true };

@@ -12,10 +12,12 @@ const createCollectionSchema = z.object({
   name: z.string().min(1).max(100),
 });
 
-const updateCollectionSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
-  coverUrl: z.string().url().nullable().optional(),
-}).strict();
+const updateCollectionSchema = z
+  .object({
+    name: z.string().min(1).max(100).optional(),
+    coverUrl: z.string().url().nullable().optional(),
+  })
+  .strict();
 
 const addItemSchema = z.object({
   itemId: z.string().uuid(),

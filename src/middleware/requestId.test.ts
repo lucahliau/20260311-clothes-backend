@@ -1,8 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveRequestId } from "./requestId.js";
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 describe("resolveRequestId", () => {
   it("generates a UUID v4 when no header is provided", () => {
@@ -25,8 +24,7 @@ describe("resolveRequestId", () => {
   });
 
   it("rejects header strings that contain a UUID plus extra junk (no partial matches)", () => {
-    expect(resolveRequestId("550e8400-e29b-41d4-a716-446655440000; evil"))
-      .toMatch(UUID_RE);
+    expect(resolveRequestId("550e8400-e29b-41d4-a716-446655440000; evil")).toMatch(UUID_RE);
   });
 
   it("rejects non-string header values (array, number, null)", () => {

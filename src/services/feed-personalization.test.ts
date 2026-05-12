@@ -96,7 +96,10 @@ describe("roundRobinByCluster", () => {
     ];
     const out = roundRobinByCluster(cands, 4);
     // First two slots must hit both clusters once each.
-    const clusters = out.slice(0, 2).map((c) => c.clusterIndex).sort();
+    const clusters = out
+      .slice(0, 2)
+      .map((c) => c.clusterIndex)
+      .sort();
     expect(clusters).toEqual([0, 1]);
     // No cluster monopolizes the result.
     const counts = new Map<number, number>();
