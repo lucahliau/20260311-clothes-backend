@@ -3,7 +3,11 @@ import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
-import { buildPersonalizedFeed, type FeedFilters } from "../services/feed-personalization.js";
+import {
+  buildPersonalizedFeed,
+  type FeedFilters,
+  type FeedMatch,
+} from "../services/feed-personalization.js";
 
 const router = Router();
 
@@ -110,9 +114,11 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   // if anything in the embedding pipeline fails (missing pgvector index, DB
   // error, etc.) so /items/feed never goes empty for an avoidable reason.
   try {
-    const items = await buildPersonalizedFeed({ userId, limit, filters });
-    if (items.length > 0) {
-      res.json({ items, remaining: items.length });
+    const entries = await buildPersonalizedFeed({ userId, limit, filters });
+    if (entries.length > 0) {
+      const items = entries.map((e) => e.item);
+      const matches: FeedMatch[] = entries.map((e) => e.match);
+      res.json({ items, matches, remaining: items.length });
       return;
     }
   } catch (err) {
@@ -151,7 +157,7 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
 
   const idOrder = idRows.map((r) => r.id);
   if (idOrder.length === 0) {
-    res.json({ items: [], remaining: 0 });
+    res.json({ items: [], matches: [], remaining: 0 });
     return;
   }
 
@@ -163,7 +169,19 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     .map((id) => byId.get(id))
     .filter((x): x is ClothingItem => x !== undefined);
 
-  res.json({ items, remaining: items.length });
+  // Fallback path has no embedding/clustering signal, so all matches are
+  // tagged as random so the client still gets a coherent response shape.
+  const matches: FeedMatch[] = items.map((item) => ({
+    itemId: item.id,
+    source: "random",
+    clusterIndex: null,
+    clusterSim: null,
+    scorePct: null,
+    bucket: null,
+    topContributors: [],
+  }));
+
+  res.json({ items, matches, remaining: items.length });
 });
 
 // ---------------------------------------------------------------------------

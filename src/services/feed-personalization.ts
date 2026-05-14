@@ -8,6 +8,11 @@
  *
  * Falls back to a preference-filtered random feed when the user has too few
  * positive swipes with embeddings to cluster meaningfully (cold start).
+ *
+ * In addition to producing an ordered list of items, this module surfaces
+ * per-card match metadata (source, clusterSim, calibrated %, bucket, and the
+ * top liked items that built the matching cluster) so the client can render a
+ * match-likelihood badge and an explainer.
  */
 
 import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
@@ -41,6 +46,15 @@ const NOVELTY_FRACTION = 0.15;
 // Caching
 const CLUSTER_TTL_MS = 5 * 60 * 1000;
 
+// Match explainer
+const TOP_CONTRIBUTORS_PER_CLUSTER = 5;
+
+// Calibrated display % thresholds (operate on cosine similarity).
+const CLUSTER_SIM_LOW_END = 0.15; // 5% display
+const CLUSTER_SIM_HIGH_END = 0.45; // 99% display
+const BUCKET_HIGH_MIN = 0.35;
+const BUCKET_MEDIUM_MIN = 0.25;
+
 // ---------- vector (de)serialization ----------
 
 function parseVector(s: string): Vector {
@@ -57,10 +71,51 @@ function vectorToLiteral(v: Vector): string {
   return "[" + Array.from(v).join(",") + "]";
 }
 
+// ---------- types ----------
+
+export type MatchSource = "personalized" | "novelty" | "random" | "cold_start";
+export type MatchBucket = "high" | "medium" | "low";
+
+export type ClusterContributor = {
+  itemId: string;
+  name: string;
+  imageUrl: string | null;
+  sim: number;
+};
+
+export type FeedMatch = {
+  itemId: string;
+  source: MatchSource;
+  clusterIndex: number | null;
+  clusterSim: number | null;
+  scorePct: number | null;
+  bucket: MatchBucket | null;
+  topContributors: ClusterContributor[];
+};
+
+export type FeedEntry = {
+  item: ClothingItem;
+  match: FeedMatch;
+};
+
+// ---------- calibration ----------
+
+export function calibrateScorePct(sim: number): number {
+  const denom = CLUSTER_SIM_HIGH_END - CLUSTER_SIM_LOW_END;
+  const raw = ((sim - CLUSTER_SIM_LOW_END) / denom) * 100;
+  return Math.max(5, Math.min(99, Math.round(raw)));
+}
+
+export function bucketForClusterSim(sim: number): MatchBucket {
+  if (sim >= BUCKET_HIGH_MIN) return "high";
+  if (sim >= BUCKET_MEDIUM_MIN) return "medium";
+  return "low";
+}
+
 // ---------- cluster cache ----------
 
 type UserClusters = {
-  clusters: { centroid: Vector; weight: number }[];
+  clusters: { centroid: Vector; weight: number; topContributors: ClusterContributor[] }[];
   dislikeCentroid: Vector | null;
   positiveCount: number;
   computedAt: number;
@@ -104,18 +159,41 @@ function buildItemFilterSql(excludeIds: string[], filters: FeedFilters): Prisma.
   return clauses;
 }
 
+function firstImageUrl(imageUrl: string | null, images: string[] | null): string | null {
+  if (imageUrl && imageUrl.length > 0) return imageUrl;
+  if (images && images.length > 0) return images[0] ?? null;
+  return null;
+}
+
 // ---------- build user clusters ----------
 
 async function buildUserClusters(userId: string): Promise<UserClusters> {
   const now = Date.now();
-  // Positive swipes joined with embeddings (LOVE + LIKE only, recent first).
+  // Positive swipes joined with embeddings and item rows so we can later show
+  // "you liked these N items" alongside each personalized card.
   const positiveRows = await prisma.$queryRaw<
-    { action: "LOVE" | "LIKE"; createdAt: Date; vector: string }[]
+    {
+      itemId: string;
+      action: "LOVE" | "LIKE";
+      createdAt: Date;
+      vector: string;
+      name: string;
+      imageUrl: string | null;
+      images: string[];
+    }[]
   >`
-    SELECT s.action::text AS action, s."createdAt", ie.vector::text AS vector
+    SELECT s."itemId" AS "itemId",
+           s.action::text AS action,
+           s."createdAt",
+           ie.vector::text AS vector,
+           ci.name AS name,
+           ci."imageUrl" AS "imageUrl",
+           ci.images AS images
     FROM "Swipe" s
     JOIN "ItemEmbedding" ie
       ON ie."itemId" = s."itemId" AND ie.model = ${EMBEDDING_MODEL}
+    JOIN "ClothingItem" ci
+      ON ci.id = s."itemId"
     WHERE s."userId" = ${userId} AND s.action IN ('LOVE', 'LIKE')
     ORDER BY s."createdAt" DESC
     LIMIT ${MAX_POSITIVE_HISTORY}
@@ -140,13 +218,33 @@ async function buildUserClusters(userId: string): Promise<UserClusters> {
   }
 
   const k = pickK(points.length);
-  const { centroids, weights: clusterWeights } = sphericalKMeans(points, k, weights, {
+  const { centroids, assignments, weights: clusterWeights } = sphericalKMeans(points, k, weights, {
     seed: hashStringToInt(userId),
   });
+
+  // For each cluster, gather contributors and rank by cosine similarity to its
+  // centroid so the explainer surfaces the most representative liked items.
+  const contributorsByCluster: ClusterContributor[][] = Array.from(
+    { length: centroids.length },
+    () => [],
+  );
+  for (let i = 0; i < points.length; i++) {
+    const ci = assignments[i] ?? 0;
+    const sim = dot(points[i]!, centroids[ci]!);
+    const row = positiveRows[i]!;
+    contributorsByCluster[ci]!.push({
+      itemId: row.itemId,
+      name: row.name,
+      imageUrl: firstImageUrl(row.imageUrl, row.images),
+      sim,
+    });
+  }
+  for (const arr of contributorsByCluster) arr.sort((a, b) => b.sim - a.sim);
 
   const clusters = centroids.map((centroid, i) => ({
     centroid,
     weight: clusterWeights[i] ?? 0,
+    topContributors: contributorsByCluster[i]!.slice(0, TOP_CONTRIBUTORS_PER_CLUSTER),
   }));
 
   // Dislike centroid (single vector; weighted mean of recent DISLIKEs).
@@ -336,6 +434,8 @@ export function roundRobinByCluster(scored: ScoredCandidate[], limit: number): S
 
 // ---------- exploration ----------
 
+type NoveltyPick = { item: ClothingItem; maxSim: number; clusterIndex: number };
+
 async function fetchRandomItems(
   count: number,
   excludeIds: string[],
@@ -361,14 +461,15 @@ async function fetchRandomItems(
 /**
  * Novelty: random sample from the catalog, then JS-side keep items least
  * similar to the user's existing clusters (broadens taste without going fully
- * random). Returns up to `count` items.
+ * random). Returns up to `count` items, each annotated with its similarity to
+ * the nearest cluster so the explainer can show a calibrated score.
  */
 async function fetchNoveltyItems(
   count: number,
   excludeIds: string[],
   filters: FeedFilters,
   clusters: { centroid: Vector }[],
-): Promise<ClothingItem[]> {
+): Promise<NoveltyPick[]> {
   if (count <= 0 || clusters.length === 0) return [];
   const filterClauses = buildItemFilterSql(excludeIds, filters);
   const filterSql = Prisma.join(filterClauses, " AND ");
@@ -387,28 +488,42 @@ async function fetchNoveltyItems(
   const scored = rows.map((r) => {
     const v = normalize(parseVector(r.vector));
     let maxSim = -Infinity;
-    for (const c of clusters) {
-      const s = dot(v, c.centroid);
-      if (s > maxSim) maxSim = s;
+    let bestCluster = 0;
+    for (let i = 0; i < clusters.length; i++) {
+      const s = dot(v, clusters[i]!.centroid);
+      if (s > maxSim) {
+        maxSim = s;
+        bestCluster = i;
+      }
     }
-    return { itemId: r.itemId, maxSim };
+    return { itemId: r.itemId, maxSim, clusterIndex: bestCluster };
   });
   scored.sort((a, b) => a.maxSim - b.maxSim);
-  const ids = scored.slice(0, count).map((s) => s.itemId);
+  const picks = scored.slice(0, count);
+  const ids = picks.map((s) => s.itemId);
   const items = await prisma.clothingItem.findMany({ where: { id: { in: ids } } });
   const byId = new Map(items.map((i) => [i.id, i]));
-  return ids.map((id) => byId.get(id)).filter((x): x is ClothingItem => x !== undefined);
+  const out: NoveltyPick[] = [];
+  for (const p of picks) {
+    const item = byId.get(p.itemId);
+    if (item) out.push({ item, maxSim: p.maxSim, clusterIndex: p.clusterIndex });
+  }
+  return out;
 }
 
 /**
  * Interleave exploration items into the personalized list. Exploration items
  * are spread roughly evenly so they don't all land at the end of the scroll.
+ *
+ * Generic in T so callers can mix ClothingItem[] (the original use) or
+ * FeedEntry[] (when carrying per-card match metadata) through this function
+ * without losing data.
  */
-export function interleaveExploration(
-  personalized: ClothingItem[],
-  exploration: ClothingItem[],
+export function interleaveExploration<T>(
+  personalized: T[],
+  exploration: T[],
   rand: () => number,
-): ClothingItem[] {
+): T[] {
   if (exploration.length === 0) return personalized;
   if (personalized.length === 0) return exploration;
   const total = personalized.length + exploration.length;
@@ -422,7 +537,7 @@ export function interleaveExploration(
     explorationSlots.add(slot);
   }
 
-  const out: ClothingItem[] = [];
+  const out: T[] = [];
   let p = 0;
   let e = 0;
   for (let i = 0; i < total; i++) {
@@ -440,6 +555,61 @@ export function interleaveExploration(
   return out;
 }
 
+// ---------- match builders ----------
+
+function personalizedMatch(
+  itemId: string,
+  clusterIndex: number,
+  clusterSim: number,
+  topContributors: ClusterContributor[],
+): FeedMatch {
+  return {
+    itemId,
+    source: "personalized",
+    clusterIndex,
+    clusterSim,
+    scorePct: calibrateScorePct(clusterSim),
+    bucket: bucketForClusterSim(clusterSim),
+    topContributors,
+  };
+}
+
+function noveltyMatch(itemId: string, clusterIndex: number, maxSim: number): FeedMatch {
+  return {
+    itemId,
+    source: "novelty",
+    clusterIndex,
+    clusterSim: maxSim,
+    scorePct: calibrateScorePct(maxSim),
+    bucket: "medium",
+    topContributors: [],
+  };
+}
+
+function randomMatch(itemId: string): FeedMatch {
+  return {
+    itemId,
+    source: "random",
+    clusterIndex: null,
+    clusterSim: null,
+    scorePct: null,
+    bucket: null,
+    topContributors: [],
+  };
+}
+
+function coldStartMatch(itemId: string): FeedMatch {
+  return {
+    itemId,
+    source: "cold_start",
+    clusterIndex: null,
+    clusterSim: null,
+    scorePct: null,
+    bucket: null,
+    topContributors: [],
+  };
+}
+
 // ---------- cold start ----------
 
 async function coldStartFeed(
@@ -447,7 +617,7 @@ async function coldStartFeed(
   excludeIds: string[],
   filters: FeedFilters,
   limit: number,
-): Promise<ClothingItem[]> {
+): Promise<FeedEntry[]> {
   // Apply tag-preference filter as a soft preference: get a larger random pool,
   // then prefer items that overlap with stylePreferences / favoriteBrands.
   const filterClauses = buildItemFilterSql(excludeIds, filters);
@@ -478,7 +648,10 @@ async function coldStartFeed(
     return { item, s };
   });
   scored.sort((a, b) => b.s - a.s);
-  return scored.slice(0, limit).map((x) => x.item);
+  return scored.slice(0, limit).map((x) => ({
+    item: x.item,
+    match: coldStartMatch(x.item.id),
+  }));
 }
 
 // ---------- top-level entry ----------
@@ -489,7 +662,7 @@ export type BuildFeedArgs = {
   filters: FeedFilters;
 };
 
-export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<ClothingItem[]> {
+export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<FeedEntry[]> {
   const { userId, limit, filters } = args;
 
   // Excluded items: previously-swiped (cap 1000 most recent).
@@ -539,20 +712,37 @@ export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<Clothi
   const scored = scoreCandidates(candidates, itemsById, user, dislikeDist, Math.random);
   scored.sort((a, b) => b.score - a.score);
   const diversified = roundRobinByCluster(scored, nPersonalized);
-  const personalized = diversified
-    .map((c) => itemsById.get(c.itemId))
-    .filter((x): x is ClothingItem => x !== undefined);
+  const personalized: FeedEntry[] = [];
+  for (const c of diversified) {
+    const item = itemsById.get(c.itemId);
+    if (!item) continue;
+    const cluster = clusterState.clusters[c.clusterIndex];
+    const contributors = cluster?.topContributors ?? [];
+    personalized.push({
+      item,
+      match: personalizedMatch(item.id, c.clusterIndex, c.clusterSim, contributors),
+    });
+  }
 
   // 4. Exploration: items not already in personalized set.
-  const personalizedIds = new Set(personalized.map((i) => i.id));
+  const personalizedIds = new Set(personalized.map((e) => e.item.id));
   const expExclude = [...excludeIds, ...personalizedIds];
-  const [novelty, randomItems] = await Promise.all([
+  const [noveltyPicks, randomItems] = await Promise.all([
     fetchNoveltyItems(nNovelty, expExclude, filters, clusterState.clusters),
     fetchRandomItems(nRandom, [...expExclude], filters),
   ]);
 
+  const noveltyEntries: FeedEntry[] = noveltyPicks.map((p) => ({
+    item: p.item,
+    match: noveltyMatch(p.item.id, p.clusterIndex, p.maxSim),
+  }));
+  const randomEntries: FeedEntry[] = randomItems.map((item) => ({
+    item,
+    match: randomMatch(item.id),
+  }));
+
   // 5. Interleave so exploration items appear throughout the scroll.
-  const explorationPool = [...novelty, ...randomItems];
+  const explorationPool: FeedEntry[] = [...noveltyEntries, ...randomEntries];
   // shuffle exploration pool so novelty and random mix
   for (let i = explorationPool.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));

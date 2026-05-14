@@ -3,6 +3,8 @@ import {
   scoreCandidates,
   roundRobinByCluster,
   interleaveExploration,
+  calibrateScorePct,
+  bucketForClusterSim,
 } from "./feed-personalization.js";
 import type { ClothingItem } from "../../generated/prisma/client.js";
 
@@ -138,5 +140,56 @@ describe("interleaveExploration", () => {
     const a = [fakeItem("a")];
     expect(interleaveExploration(a, [], () => 0)).toEqual(a);
     expect(interleaveExploration([], a, () => 0)).toEqual(a);
+  });
+
+  it("preserves match metadata when mixing FeedEntry-shaped values", () => {
+    type Entry = { item: ClothingItem; tag: string };
+    const personalized: Entry[] = [
+      { item: fakeItem("p0"), tag: "personalized" },
+      { item: fakeItem("p1"), tag: "personalized" },
+    ];
+    const exploration: Entry[] = [
+      { item: fakeItem("e0"), tag: "novelty" },
+      { item: fakeItem("e1"), tag: "random" },
+    ];
+    const merged = interleaveExploration(personalized, exploration, () => 0.5);
+    expect(merged).toHaveLength(4);
+    const tagsByItem = new Map(merged.map((e) => [e.item.id, e.tag]));
+    expect(tagsByItem.get("p0")).toBe("personalized");
+    expect(tagsByItem.get("e0")).toBe("novelty");
+    expect(tagsByItem.get("e1")).toBe("random");
+  });
+});
+
+describe("calibrateScorePct", () => {
+  it("is monotonic in cluster similarity", () => {
+    const xs = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5];
+    const ys = xs.map(calibrateScorePct);
+    for (let i = 1; i < ys.length; i++) {
+      expect(ys[i]!).toBeGreaterThanOrEqual(ys[i - 1]!);
+    }
+  });
+
+  it("clamps to [5, 99] and hits expected anchor points", () => {
+    expect(calibrateScorePct(-0.5)).toBe(5);
+    expect(calibrateScorePct(0.0)).toBe(5);
+    expect(calibrateScorePct(0.15)).toBe(5);
+    expect(calibrateScorePct(0.25)).toBeGreaterThanOrEqual(30);
+    expect(calibrateScorePct(0.25)).toBeLessThanOrEqual(36);
+    expect(calibrateScorePct(0.35)).toBeGreaterThanOrEqual(63);
+    expect(calibrateScorePct(0.35)).toBeLessThanOrEqual(70);
+    expect(calibrateScorePct(0.45)).toBe(99);
+    expect(calibrateScorePct(0.9)).toBe(99);
+  });
+});
+
+describe("bucketForClusterSim", () => {
+  it("uses the documented thresholds", () => {
+    expect(bucketForClusterSim(0.4)).toBe("high");
+    expect(bucketForClusterSim(0.35)).toBe("high");
+    expect(bucketForClusterSim(0.349)).toBe("medium");
+    expect(bucketForClusterSim(0.25)).toBe("medium");
+    expect(bucketForClusterSim(0.249)).toBe("low");
+    expect(bucketForClusterSim(0.0)).toBe("low");
   });
 });
