@@ -49,11 +49,20 @@ const CLUSTER_TTL_MS = 5 * 60 * 1000;
 // Match explainer
 const TOP_CONTRIBUTORS_PER_CLUSTER = 5;
 
-// Calibrated display % thresholds (operate on cosine similarity).
-const CLUSTER_SIM_LOW_END = 0.15; // 5% display
-const CLUSTER_SIM_HIGH_END = 0.45; // 99% display
-const BUCKET_HIGH_MIN = 0.35;
-const BUCKET_MEDIUM_MIN = 0.25;
+// Calibrated display %: logistic curve over cosine similarity. CLIP ViT-B/32
+// image embeddings are highly anisotropic, so real centroid↔item cosine sims
+// live in a narrow high band (measured: personalized candidates ~0.86–0.97,
+// novelty ~0.37–0.82). A linear window saturated everything to one rail, so we
+// use a sigmoid centered/sloped to spread that band across the display range:
+// personalized → ~28–84%, novelty → ~5–13%.
+const CALIB_MIDPOINT = 0.9; // sim mapped to 50%
+const CALIB_SLOPE = 24; // steepness around the midpoint
+const MIN_DISPLAY_PCT = 5;
+const MAX_DISPLAY_PCT = 99;
+
+// Bucket cutoffs operate on the calibrated %, so they can't re-saturate.
+const BUCKET_HIGH_MIN_PCT = 66;
+const BUCKET_MEDIUM_MIN_PCT = 33;
 
 // ---------- vector (de)serialization ----------
 
@@ -101,15 +110,18 @@ export type FeedEntry = {
 // ---------- calibration ----------
 
 export function calibrateScorePct(sim: number): number {
-  const denom = CLUSTER_SIM_HIGH_END - CLUSTER_SIM_LOW_END;
-  const raw = ((sim - CLUSTER_SIM_LOW_END) / denom) * 100;
-  return Math.max(5, Math.min(99, Math.round(raw)));
+  const pct = 100 / (1 + Math.exp(-CALIB_SLOPE * (sim - CALIB_MIDPOINT)));
+  return Math.max(MIN_DISPLAY_PCT, Math.min(MAX_DISPLAY_PCT, Math.round(pct)));
+}
+
+export function bucketForScorePct(pct: number): MatchBucket {
+  if (pct >= BUCKET_HIGH_MIN_PCT) return "high";
+  if (pct >= BUCKET_MEDIUM_MIN_PCT) return "medium";
+  return "low";
 }
 
 export function bucketForClusterSim(sim: number): MatchBucket {
-  if (sim >= BUCKET_HIGH_MIN) return "high";
-  if (sim >= BUCKET_MEDIUM_MIN) return "medium";
-  return "low";
+  return bucketForScorePct(calibrateScorePct(sim));
 }
 
 // ---------- cluster cache ----------
@@ -575,13 +587,14 @@ function personalizedMatch(
 }
 
 function noveltyMatch(itemId: string, clusterIndex: number, maxSim: number): FeedMatch {
+  const scorePct = calibrateScorePct(maxSim);
   return {
     itemId,
     source: "novelty",
     clusterIndex,
     clusterSim: maxSim,
-    scorePct: calibrateScorePct(maxSim),
-    bucket: "medium",
+    scorePct,
+    bucket: bucketForScorePct(scorePct),
     topContributors: [],
   };
 }

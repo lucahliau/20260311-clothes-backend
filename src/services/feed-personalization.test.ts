@@ -5,6 +5,7 @@ import {
   interleaveExploration,
   calibrateScorePct,
   bucketForClusterSim,
+  bucketForScorePct,
 } from "./feed-personalization.js";
 import type { ClothingItem } from "../../generated/prisma/client.js";
 
@@ -163,33 +164,53 @@ describe("interleaveExploration", () => {
 
 describe("calibrateScorePct", () => {
   it("is monotonic in cluster similarity", () => {
-    const xs = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5];
+    const xs = [0.0, 0.3, 0.6, 0.8, 0.86, 0.9, 0.95, 0.97, 1.0];
     const ys = xs.map(calibrateScorePct);
     for (let i = 1; i < ys.length; i++) {
       expect(ys[i]!).toBeGreaterThanOrEqual(ys[i - 1]!);
     }
   });
 
-  it("clamps to [5, 99] and hits expected anchor points", () => {
+  it("clamps to [5, 99] and maps the logistic anchors", () => {
     expect(calibrateScorePct(-0.5)).toBe(5);
     expect(calibrateScorePct(0.0)).toBe(5);
-    expect(calibrateScorePct(0.15)).toBe(5);
-    expect(calibrateScorePct(0.25)).toBeGreaterThanOrEqual(30);
-    expect(calibrateScorePct(0.25)).toBeLessThanOrEqual(36);
-    expect(calibrateScorePct(0.35)).toBeGreaterThanOrEqual(63);
-    expect(calibrateScorePct(0.35)).toBeLessThanOrEqual(70);
-    expect(calibrateScorePct(0.45)).toBe(99);
-    expect(calibrateScorePct(0.9)).toBe(99);
+    expect(calibrateScorePct(0.9)).toBe(50); // midpoint
+    // low end of the real personalized band
+    expect(calibrateScorePct(0.86)).toBeGreaterThanOrEqual(24);
+    expect(calibrateScorePct(0.86)).toBeLessThanOrEqual(32);
+    // high end of the real personalized band
+    expect(calibrateScorePct(0.97)).toBeGreaterThanOrEqual(80);
+    expect(calibrateScorePct(0.97)).toBeLessThanOrEqual(88);
+  });
+
+  it("regression: real personalized sims (0.86-0.97) spread well below the 99 cap", () => {
+    // The old linear window clamped every real CLIP sim to 99. The logistic
+    // curve must instead produce distinct, sub-cap values across that band.
+    const band = [0.86, 0.9, 0.93, 0.95, 0.97];
+    const pcts = band.map(calibrateScorePct);
+    for (const p of pcts) expect(p).toBeLessThan(99);
+    expect(new Set(pcts).size).toBe(band.length); // all distinct
+    expect(Math.max(...pcts) - Math.min(...pcts)).toBeGreaterThan(30);
+  });
+});
+
+describe("bucketForScorePct", () => {
+  it("uses the documented %-based thresholds", () => {
+    expect(bucketForScorePct(66)).toBe("high");
+    expect(bucketForScorePct(65)).toBe("medium");
+    expect(bucketForScorePct(33)).toBe("medium");
+    expect(bucketForScorePct(32)).toBe("low");
+    expect(bucketForScorePct(5)).toBe("low");
   });
 });
 
 describe("bucketForClusterSim", () => {
-  it("uses the documented thresholds", () => {
-    expect(bucketForClusterSim(0.4)).toBe("high");
-    expect(bucketForClusterSim(0.35)).toBe("high");
-    expect(bucketForClusterSim(0.349)).toBe("medium");
-    expect(bucketForClusterSim(0.25)).toBe("medium");
-    expect(bucketForClusterSim(0.249)).toBe("low");
-    expect(bucketForClusterSim(0.0)).toBe("low");
+  it("derives the bucket from the calibrated %", () => {
+    expect(bucketForClusterSim(0.95)).toBe("high"); // ~77%
+    expect(bucketForClusterSim(0.93)).toBe("high"); // ~67%
+    expect(bucketForClusterSim(0.92)).toBe("medium"); // ~62%
+    expect(bucketForClusterSim(0.88)).toBe("medium"); // ~38%
+    expect(bucketForClusterSim(0.86)).toBe("low"); // ~28%
+    expect(bucketForClusterSim(0.5)).toBe("low"); // floored to 5%
   });
 });
