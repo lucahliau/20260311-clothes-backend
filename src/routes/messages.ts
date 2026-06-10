@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
+import { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { isBlockedPair, getBlockedUserIdSet } from "../lib/social.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -105,6 +106,31 @@ async function unreadCountForMembership(
   });
 }
 
+/**
+ * Unread counts for many conversations in one grouped query (the naive
+ * per-conversation COUNT turns a 50-thread inbox into 50 queries). Joins
+ * ConversationParticipant for the viewer's per-thread lastReadAt. Quoted
+ * identifiers are Prisma's defaults — the schema declares no @map.
+ */
+async function unreadCountsByConversation(
+  userId: string,
+  conversationIds: string[],
+): Promise<Map<string, number>> {
+  if (conversationIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<{ conversationId: string; unread: number }[]>`
+    SELECT m."conversationId" AS "conversationId", COUNT(*)::int AS unread
+    FROM "Message" m
+    JOIN "ConversationParticipant" cp
+      ON cp."conversationId" = m."conversationId" AND cp."userId" = ${userId}
+    WHERE m."conversationId" IN (${Prisma.join(conversationIds)})
+      AND m."senderId" <> ${userId}
+      AND m."deletedAt" IS NULL
+      AND m."createdAt" > COALESCE(cp."lastReadAt", to_timestamp(0))
+    GROUP BY m."conversationId"
+  `;
+  return new Map(rows.map((r) => [r.conversationId, r.unread]));
+}
+
 async function totalUnreadAcrossConversations(userId: string): Promise<number> {
   const blocked = [...(await getBlockedUserIdSet(userId))];
   const memberships = await prisma.conversationParticipant.findMany({
@@ -116,10 +142,12 @@ async function totalUnreadAcrossConversations(userId: string): Promise<number> {
     },
     select: { conversationId: true, lastReadAt: true },
   });
+  const counts = await unreadCountsByConversation(
+    userId,
+    memberships.map((m) => m.conversationId),
+  );
   let total = 0;
-  for (const m of memberships) {
-    total += await unreadCountForMembership(m.conversationId, userId, m.lastReadAt);
-  }
+  for (const unread of counts.values()) total += unread;
   return total;
 }
 
@@ -241,45 +269,49 @@ router.get("/conversations", requireAuth, async (req: Request, res: Response) =>
     }),
   ]);
 
-  const items = await Promise.all(
-    memberships.map(async (row) => {
-      const conv = row.conversation;
-      const other = conv.participants.find((p) => p.userId !== me)?.user;
-      const last = conv.messages[0];
-      const unread = await unreadCountForMembership(conv.id, me, row.lastReadAt);
-
-      let lastPreview: Record<string, unknown> | null = null;
-      if (last) {
-        if (last.deletedAt) {
-          lastPreview = {
-            id: last.id,
-            deleted: true,
-            createdAt: last.createdAt.toISOString(),
-          };
-        } else {
-          lastPreview = {
-            id: last.id,
-            content: last.content,
-            itemId: last.itemId,
-            item: last.item,
-            senderId: last.senderId,
-            createdAt: last.createdAt.toISOString(),
-          };
-        }
-      }
-
-      return {
-        conversation: {
-          id: conv.id,
-          createdAt: conv.createdAt.toISOString(),
-          updatedAt: conv.updatedAt.toISOString(),
-        },
-        otherUser: other ? previewUser(other) : null,
-        lastMessage: lastPreview,
-        unreadCount: unread,
-      };
-    }),
+  // One grouped query for all unread counts (was one COUNT per conversation).
+  const unreadByConversation = await unreadCountsByConversation(
+    me,
+    memberships.map((row) => row.conversationId),
   );
+
+  const items = memberships.map((row) => {
+    const conv = row.conversation;
+    const other = conv.participants.find((p) => p.userId !== me)?.user;
+    const last = conv.messages[0];
+    const unread = unreadByConversation.get(conv.id) ?? 0;
+
+    let lastPreview: Record<string, unknown> | null = null;
+    if (last) {
+      if (last.deletedAt) {
+        lastPreview = {
+          id: last.id,
+          deleted: true,
+          createdAt: last.createdAt.toISOString(),
+        };
+      } else {
+        lastPreview = {
+          id: last.id,
+          content: last.content,
+          itemId: last.itemId,
+          item: last.item,
+          senderId: last.senderId,
+          createdAt: last.createdAt.toISOString(),
+        };
+      }
+    }
+
+    return {
+      conversation: {
+        id: conv.id,
+        createdAt: conv.createdAt.toISOString(),
+        updatedAt: conv.updatedAt.toISOString(),
+      },
+      otherUser: other ? previewUser(other) : null,
+      lastMessage: lastPreview,
+      unreadCount: unread,
+    };
+  });
 
   res.json({ total, items });
 });

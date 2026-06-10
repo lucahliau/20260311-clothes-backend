@@ -82,7 +82,7 @@ function toAuthUser(user: {
 }
 
 function generateAccessToken(userId: string, email: string): string {
-  return jwt.sign({ userId, email }, process.env.JWT_SECRET!, {
+  return jwt.sign({ userId, email }, env().JWT_SECRET, {
     expiresIn: ACCESS_TOKEN_EXPIRY,
   });
 }

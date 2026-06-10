@@ -77,6 +77,22 @@ export function attachSentryErrorHandler(app: Express): void {
   });
 }
 
+/** Capture an exception from outside the request pipeline (process-level handlers). */
+export function captureException(err: unknown): void {
+  if (!initialized) return;
+  Sentry.captureException(err);
+}
+
+/** Best-effort flush of pending events before process exit. Never rejects. */
+export async function flushSentry(timeoutMs = 2_000): Promise<void> {
+  if (!initialized) return;
+  try {
+    await Sentry.flush(timeoutMs);
+  } catch {
+    // best-effort; exiting anyway
+  }
+}
+
 /** Bind the authenticated userId to the current request's Sentry scope. */
 export function setSentryUser(req: Request, userId: string): void {
   if (!initialized) return;

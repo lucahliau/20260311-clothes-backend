@@ -5,6 +5,11 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
+  /** Set to "1" to trust the reverse proxy outside production (Railway is covered by NODE_ENV). */
+  TRUST_PROXY: z.string().optional(),
+  /** Comma-separated browser origins allowed by CORS in production. */
+  CORS_ORIGIN: z.string().optional(),
+
   JWT_SECRET: z.string().min(16),
   JWT_REFRESH_SECRET: z.string().min(16),
 

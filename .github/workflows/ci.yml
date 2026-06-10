@@ -16,6 +16,22 @@ jobs:
     name: ci
     runs-on: ubuntu-latest
 
+    services:
+      # Integration tests run against a real Postgres. pgvector image is
+      # required — migrations create vector columns and an HNSW index.
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: clothes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +41,12 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # Surface known-vulnerable production dependencies. Non-blocking while
+      # the existing backlog is triaged; drop continue-on-error once clean.
+      - name: npm audit (high+)
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true
 
       # tsc imports from `generated/prisma`, which is gitignored. Generate it
       # before any step that compiles TypeScript.
@@ -48,3 +70,11 @@ jobs:
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/test
         run: npm test
+
+      # Endpoint tests against the pgvector service container above. The suite
+      # migrates the throwaway DB, then exercises auth, authz isolation,
+      # pagination clamps, swipes, messages (unread counts), and collections.
+      - name: Vitest (integration, real Postgres)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/clothes_test
+        run: npm run test:integration

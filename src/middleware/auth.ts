@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { env } from "../lib/env.js";
 import { setSentryUser } from "../lib/sentry.js";
 
 export interface AuthPayload {
@@ -41,7 +42,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token = header.slice(7);
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload;
+    const payload = jwt.verify(token, env().JWT_SECRET) as AuthPayload;
     req.user = payload;
     bindAuthContext(req, payload);
     next();
@@ -59,7 +60,7 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   }
   const token = header.slice(7);
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload;
+    const payload = jwt.verify(token, env().JWT_SECRET) as AuthPayload;
     req.user = payload;
     bindAuthContext(req, payload);
   } catch {

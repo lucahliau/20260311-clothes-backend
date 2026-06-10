@@ -11,13 +11,16 @@ import {
 
 const router = Router();
 
-/** High ceiling for `limit`; default is large so search/brand views are rarely truncated. Use `page` for bigger catalogs. */
-const DEFAULT_PAGE_SIZE = 50_000;
+/** Page caps. The iOS app always sends an explicit `limit` and pages on
+ * `pagination.totalPages` (computed from the effective limit), so clamping
+ * here yields more, smaller pages — never silent truncation. */
+const DEFAULT_PAGE_SIZE = 100;
 const FEED_DEFAULT_LIMIT = 50;
+const FEED_MAX_LIMIT = 200;
 const MAX_EXCLUDE_IDS = 1000; // cap notIn size to avoid query timeouts
 // UUID v4 format: 8-4-4-4-12
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_PAGE_SIZE = 500_000;
+const MAX_PAGE_SIZE = 10_000;
 
 const VALID_GENDERS = new Set(["male", "female", "unisex", "men", "women"]);
 const VALID_PRODUCT_TYPES = new Set(["tops", "bottoms", "bags", "accessories", "jackets", "other"]);
@@ -98,7 +101,10 @@ router.get("/", async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.get("/feed", requireAuth, async (req: Request, res: Response) => {
-  const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || FEED_DEFAULT_LIMIT));
+  const limit = Math.min(
+    FEED_MAX_LIMIT,
+    Math.max(1, Number(req.query.limit) || FEED_DEFAULT_LIMIT),
+  );
   const userId = req.user!.userId;
 
   const filters: FeedFilters = {};

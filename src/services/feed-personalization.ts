@@ -230,7 +230,11 @@ async function buildUserClusters(userId: string): Promise<UserClusters> {
   }
 
   const k = pickK(points.length);
-  const { centroids, assignments, weights: clusterWeights } = sphericalKMeans(points, k, weights, {
+  const {
+    centroids,
+    assignments,
+    weights: clusterWeights,
+  } = sphericalKMeans(points, k, weights, {
     seed: hashStringToInt(userId),
   });
 

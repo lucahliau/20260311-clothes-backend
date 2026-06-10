@@ -23,6 +23,10 @@ const addItemSchema = z.object({
   itemId: z.string().uuid(),
 });
 
+/** Safety ceiling on items returned with a collection — collections are
+ * user-curated and small in practice; this only guards the pathological case. */
+const MAX_COLLECTION_ITEMS = 2000;
+
 // ---------------------------------------------------------------------------
 // GET /collections
 // ---------------------------------------------------------------------------
@@ -69,6 +73,7 @@ router.get("/:id", async (req: Request, res: Response) => {
       items: {
         include: { item: true },
         orderBy: { addedAt: "desc" },
+        take: MAX_COLLECTION_ITEMS,
       },
     },
   });

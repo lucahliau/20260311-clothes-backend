@@ -31,6 +31,12 @@ If Resend rejects the send (invalid `from`, unverified domain, etc.), `POST /aut
 
 Native iOS apps using `URLSession` typically do not need CORS.
 
+## Deploy gating (Wait for CI)
+
+Railway deploys every push to `main` immediately — even if GitHub Actions is red. Enable check-suite gating so broken builds never ship:
+
+Railway dashboard → this service → **Settings → Deploy → Wait for CI**. Railway then holds the build until the commit's GitHub check suite passes.
+
 ## Trust proxy (Railway)
 
 Railway sits behind a reverse proxy. The app sets `trust proxy` when `NODE_ENV=production` or `TRUST_PROXY=1`.
