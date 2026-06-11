@@ -8,19 +8,26 @@ describe("auth lifecycle", () => {
     await resetDb();
   });
 
-  it("registers without issuing tokens and requires email verification to log in", async () => {
+  it("registers with immediate tokens (verify-later) and lets the unverified user log in", async () => {
     const body = { email: "fresh@test.dev", username: "fresh_user", password: "password123" };
 
     const reg = await request(app()).post("/auth/register").send(body);
     expect(reg.status).toBe(201);
     expect(reg.body.requiresEmailVerification).toBe(true);
-    expect(reg.body.accessToken).toBeUndefined();
+    expect(reg.body.accessToken).toBeTruthy();
+    expect(reg.body.refreshToken).toBeTruthy();
+    expect(reg.body.user.emailVerified).toBe(false);
 
+    // The registered session works immediately…
+    const me = await request(app()).get("/users/me").set(auth(reg.body.accessToken));
+    expect(me.status).toBe(200);
+
+    // …and so does a fresh login before the email is verified.
     const login = await request(app())
       .post("/auth/login")
       .send({ email: body.email, password: body.password });
-    expect(login.status).toBe(403);
-    expect(login.body.error.code).toBe("EMAIL_NOT_VERIFIED");
+    expect(login.status).toBe(200);
+    expect(login.body.user.emailVerified).toBe(false);
   });
 
   it("rejects duplicate email with 409 and invalid payload with 400", async () => {
@@ -28,6 +35,8 @@ describe("auth lifecycle", () => {
       .post("/auth/register")
       .send({ email: "fresh@test.dev", username: "other_name", password: "password123" });
     expect(dupe.status).toBe(409);
+    // Anti-enumeration: the message must not reveal WHICH field collided.
+    expect(dupe.body.error.message).toMatch(/email or username/i);
 
     const invalid = await request(app())
       .post("/auth/register")
@@ -107,5 +116,77 @@ describe("auth lifecycle", () => {
       .send({ email: user.email, password: user.password });
     expect(login.status).toBe(200);
     expect(login.body.accessToken).toBeTruthy();
+  });
+
+  it("normalizes email case on register and login", async () => {
+    const email = `Mixed.Case${Date.now()}@Test.DEV`;
+    const reg = await request(app())
+      .post("/auth/register")
+      .send({ email, username: `mixed_${Date.now() % 100000}`, password: "password123" });
+    expect(reg.status).toBe(201);
+    expect(reg.body.user.email).toBe(email.toLowerCase());
+
+    const login = await request(app())
+      .post("/auth/login")
+      .send({ email: email.toUpperCase(), password: "password123" });
+    expect(login.status).toBe(200);
+  });
+
+  it("logs in with a plain username as the identifier", async () => {
+    const user = await createVerifiedUser();
+    const res = await request(app())
+      .post("/auth/login")
+      .send({ username: user.username, password: user.password });
+    expect(res.status).toBe(200);
+    expect(res.body.accessToken).toBeTruthy();
+  });
+
+  it("change-password revokes other sessions and re-issues for the caller", async () => {
+    const user = await createVerifiedUser();
+
+    // A second device with its own session.
+    const deviceB = await request(app())
+      .post("/auth/login")
+      .send({ email: user.email, password: user.password, deviceId: "device-B-abcdef" });
+    expect(deviceB.status).toBe(200);
+
+    const change = await request(app())
+      .post("/auth/change-password")
+      .set(auth(user.accessToken))
+      .send({
+        currentPassword: user.password,
+        newPassword: "newpassword456",
+        deviceId: "device-A-abcdef",
+      });
+    expect(change.status).toBe(200);
+    expect(change.body.accessToken).toBeTruthy();
+    expect(change.body.refreshToken).toBeTruthy();
+
+    // Device B's refresh token is dead; the re-issued one works.
+    const refreshB = await request(app())
+      .post("/auth/refresh")
+      .send({ refreshToken: deviceB.body.refreshToken });
+    expect(refreshB.status).toBe(401);
+
+    const refreshA = await request(app())
+      .post("/auth/refresh")
+      .send({ refreshToken: change.body.refreshToken });
+    expect(refreshA.status).toBe(200);
+
+    // Old password rejected, new one accepted.
+    expect(
+      (
+        await request(app())
+          .post("/auth/login")
+          .send({ email: user.email, password: user.password })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await request(app())
+          .post("/auth/login")
+          .send({ email: user.email, password: "newpassword456" })
+      ).status,
+    ).toBe(200);
   });
 });

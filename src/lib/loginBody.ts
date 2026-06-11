@@ -32,10 +32,16 @@ export function normalizeLoginBody(raw: unknown): unknown {
   return raw;
 }
 
-const loginFieldsSchema = z.object({
-  email: z.string().email(),
-  password: z.string(),
-});
+/** Login accepts either identifier: a valid email, or a plain username. */
+const loginFieldsSchema = z
+  .object({
+    email: z.string().email().optional(),
+    username: z.string().min(1).optional(),
+    password: z.string(),
+  })
+  .refine((v) => Boolean(v.email ?? v.username), {
+    message: "email or username is required",
+  });
 
 /** Parsed login payload after normalization + validation. */
 export const loginBodySchema = z.preprocess(normalizeLoginBody, loginFieldsSchema);

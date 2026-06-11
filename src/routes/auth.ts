@@ -7,7 +7,14 @@ import * as jose from "jose";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
-import { sendPasswordResetEmail, sendVerificationEmail } from "../lib/email.js";
+import {
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+  sendPasswordChangedEmail,
+  sendWelcomeEmail,
+  sendSignInMethodAddedEmail,
+} from "../lib/email.js";
+import { normalizeEmail } from "../lib/emailAddress.js";
 import { env } from "../lib/env.js";
 import { AppError } from "../middleware/error.js";
 import { loginBodySchema } from "../lib/loginBody.js";
@@ -58,6 +65,7 @@ function toAuthUser(user: {
   favoriteBrands?: string[];
   preferredSizes?: unknown;
   onboardingCompleted?: boolean;
+  emailVerified?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 }) {
@@ -76,6 +84,7 @@ function toAuthUser(user: {
     favoriteBrands: user.favoriteBrands ?? [],
     preferredSizes: user.preferredSizes ?? null,
     onboardingCompleted: user.onboardingCompleted ?? false,
+    emailVerified: user.emailVerified ?? false,
     createdAt: user.createdAt ? user.createdAt.toISOString() : new Date().toISOString(),
     updatedAt: user.updatedAt ? user.updatedAt.toISOString() : new Date().toISOString(),
   };
@@ -161,6 +170,7 @@ const logoutSchema = z.object({
 const changePasswordSchema = z.object({
   currentPassword: z.string(),
   newPassword: z.string().min(8).max(128),
+  deviceId: deviceIdField,
 });
 
 const resetRequestSchema = z.object({
@@ -186,15 +196,17 @@ const resendVerificationSchema = z.object({
 
 router.post("/register", authLimiter, async (req: Request, res: Response) => {
   const body = req.body ?? {};
-  const { email, username, password } = registerSchema.parse(body);
+  const { email: rawEmail, username, password, deviceId } = registerSchema.parse(body);
+  const email = normalizeEmail(rawEmail);
 
   const existingUser = await prisma.user.findFirst({
     where: { OR: [{ email }, { username }] },
   });
 
   if (existingUser) {
-    const field = existingUser.email === email ? "email" : "username";
-    throw new AppError(409, "CONFLICT", `A user with that ${field} already exists`);
+    // Deliberately vague about WHICH field collided — naming it would let
+    // anyone probe which emails have accounts here.
+    throw new AppError(409, "CONFLICT", "An account with that email or username already exists");
   }
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -214,14 +226,30 @@ router.post("/register", authLimiter, async (req: Request, res: Response) => {
 
   const baseUrl = env().APP_URL.replace(/\/$/, "");
   const verifyUrl = `${baseUrl}/verify-email?token=${rawVerificationToken}`;
-  await sendVerificationEmail(user.email, verifyUrl);
-  req.log.debug({ userId: user.id }, "[auth] register: verification email sent");
+  try {
+    await sendVerificationEmail(user.email, verifyUrl);
+    req.log.debug({ userId: user.id }, "[auth] register: verification email sent");
+  } catch (err) {
+    // Verify-later policy: signup must not fail because the email did — the
+    // user can resend from the in-app banner.
+    req.log.error({ err, userId: user.id }, "[auth] register: verification email failed");
+  }
 
-  // No tokens at this stage — the client must show a "check your email" screen
-  // and call /auth/login once the user clicks the verification link.
+  // Verify-later: the user is signed in immediately. `emailVerified` stays
+  // false until they click the emailed link; the app nags via a banner.
+  const session = await upsertSessionForLogin({
+    userId: user.id,
+    deviceId: resolveDeviceId({ deviceId }),
+    userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
+  });
+  const accessToken = generateAccessToken(user.id, user.email);
+
   res.status(201).json({
     user: toAuthUser(user),
+    accessToken,
+    refreshToken: session.refreshToken,
     requiresEmailVerification: true,
+    isNewUser: true,
   });
 });
 
@@ -235,13 +263,15 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
   if (!parsed.success) {
     const empty = Object.keys(raw as Record<string, unknown>).length === 0;
     const message = empty
-      ? 'Request body is empty or could not be parsed. Send Content-Type: application/json with {"email":"...","password":"..."}, or application/x-www-form-urlencoded with the same fields.'
+      ? 'Request body is empty or could not be parsed. Send Content-Type: application/json with {"email":"...","password":"..."} (or "username" instead of "email"), or application/x-www-form-urlencoded with the same fields.'
       : "Validation failed";
     throw new AppError(400, "VALIDATION_ERROR", message, parsed.error.flatten().fieldErrors);
   }
-  const { email, password } = parsed.data;
+  const { email, username, password } = parsed.data;
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = email
+    ? await prisma.user.findUnique({ where: { email: normalizeEmail(email) } })
+    : await prisma.user.findUnique({ where: { username: username! } });
 
   if (!user || !user.passwordHash) {
     throw new AppError(401, "UNAUTHORIZED", "Invalid email or password");
@@ -263,14 +293,8 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
     throw new AppError(401, "UNAUTHORIZED", "Invalid email or password");
   }
 
-  // Password matched. Block password-account logins until email is verified;
-  // OAuth-linked users (appleId/googleId) are exempt because their providers
-  // already prove email control.
-  if (!user.emailVerified && !user.appleId && !user.googleId) {
-    throw new AppError(403, "EMAIL_NOT_VERIFIED", "Please verify your email before logging in.", {
-      email: user.email,
-    });
-  }
+  // Verify-later policy: unverified users may log in. The app nags via a
+  // banner driven by `user.emailVerified` until they click the email link.
 
   if (shouldClearOnSuccess(user)) {
     await prisma.user.update({
@@ -379,7 +403,9 @@ router.post("/forgot-password", authLimiter, async (req: Request, res: Response)
   }
 
   // Always return 200 to avoid leaking whether the email exists
-  const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+  const user = await prisma.user.findUnique({
+    where: { email: normalizeEmail(parsed.data.email) },
+  });
 
   if (!user) {
     req.log.debug("[auth] forgot-password: no matching user");
@@ -445,6 +471,7 @@ router.post("/reset-password", async (req: Request, res: Response) => {
   });
   // Real "invalidate all sessions" effect now lives here.
   await deleteAllSessionsForUser(user.id);
+  void sendPasswordChangedEmail(user.email);
 
   req.log.debug({ userId: user.id }, "[auth] POST /auth/reset-password: success");
   res.json({ message: "Password has been reset. Please log in again." });
@@ -488,6 +515,8 @@ router.post("/verify-email", async (req: Request, res: Response) => {
     },
   });
 
+  void sendWelcomeEmail(user.email, user.username);
+
   req.log.debug({ userId: user.id }, "[auth] POST /auth/verify-email: success");
   res.json({ message: "Email verified. You can now log in." });
 });
@@ -503,7 +532,9 @@ router.post("/resend-verification", authLimiter, async (req: Request, res: Respo
     throw new AppError(400, "BAD_REQUEST", "A valid email is required");
   }
 
-  const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+  const user = await prisma.user.findUnique({
+    where: { email: normalizeEmail(parsed.data.email) },
+  });
 
   if (!user) {
     req.log.debug("[auth] resend-verification: no matching user");
@@ -557,7 +588,8 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
   }
 
   const appleId = applePayload.sub;
-  const appleEmail = applePayload.email as string | undefined;
+  const rawAppleEmail = applePayload.email as string | undefined;
+  const appleEmail = rawAppleEmail ? normalizeEmail(rawAppleEmail) : undefined;
 
   if (!appleId) {
     throw new AppError(401, "UNAUTHORIZED", "Invalid Apple identity token: missing subject");
@@ -574,6 +606,7 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
         where: { id: user.id },
         data: { appleId, emailVerified: true },
       });
+      void sendSignInMethodAddedEmail(user.email, "Apple");
     }
   }
 
@@ -634,7 +667,8 @@ router.post("/google", authLimiter, async (req: Request, res: Response) => {
   }
 
   const googleId = googlePayload.sub;
-  const googleEmail = googlePayload.email as string | undefined;
+  const rawGoogleEmail = googlePayload.email as string | undefined;
+  const googleEmail = rawGoogleEmail ? normalizeEmail(rawGoogleEmail) : undefined;
   const emailVerified =
     googlePayload.email_verified === true || googlePayload.email_verified === "true";
 
@@ -653,6 +687,7 @@ router.post("/google", authLimiter, async (req: Request, res: Response) => {
         where: { id: user.id },
         data: { googleId, emailVerified: true },
       });
+      void sendSignInMethodAddedEmail(user.email, "Google");
     }
   }
 
@@ -694,7 +729,7 @@ router.post("/google", authLimiter, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.post("/change-password", requireAuth, async (req: Request, res: Response) => {
-  const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+  const { currentPassword, newPassword, deviceId } = changePasswordSchema.parse(req.body);
 
   const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
   if (!user || !user.passwordHash) {
@@ -713,7 +748,27 @@ router.post("/change-password", requireAuth, async (req: Request, res: Response)
     data: { passwordHash },
   });
 
-  res.json({ message: "Password changed successfully" });
+  // A password change must not leave possibly-compromised sessions alive:
+  // revoke everything, then re-issue for the requesting device (when it
+  // identified itself) so the user isn't logged out mid-action.
+  await deleteAllSessionsForUser(user.id);
+  void sendPasswordChangedEmail(user.email);
+
+  if (deviceId) {
+    const session = await upsertSessionForLogin({
+      userId: user.id,
+      deviceId,
+      userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
+    });
+    res.json({
+      message: "Password changed. Other devices were signed out.",
+      accessToken: generateAccessToken(user.id, user.email),
+      refreshToken: session.refreshToken,
+    });
+    return;
+  }
+
+  res.json({ message: "Password changed. All devices were signed out." });
 });
 
 export default router;

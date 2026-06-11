@@ -3,7 +3,14 @@ import { z } from "zod";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth, optionalAuth } from "../middleware/auth.js";
-import { createAvatarUploadUrl } from "../lib/supabase.js";
+import {
+  createAvatarUploadUrl,
+  avatarPublicPrefix,
+  avatarPathFromPublicUrl,
+  removeAvatarObject,
+} from "../lib/supabase.js";
+import { deleteAllSessionsForUser } from "../lib/sessions.js";
+import { sendAccountDeletedEmail } from "../lib/email.js";
 import { AppError } from "../middleware/error.js";
 import { searchLimiter } from "../middleware/rateLimit.js";
 import { isBlockedPair } from "../lib/social.js";
@@ -156,11 +163,37 @@ router.patch("/me", requireAuth, async (req: Request, res: Response) => {
     throw new AppError(400, "BAD_REQUEST", "No fields to update");
   }
 
+  // Avatars must be objects THIS account uploaded to our bucket — not an
+  // arbitrary URL and not another user's object. Skipped when Supabase isn't
+  // configured (nothing to validate against; uploads are impossible anyway).
+  let previousAvatarUrl: string | null = null;
+  if (data.avatarUrl !== undefined && avatarPublicPrefix() !== null) {
+    const path = avatarPathFromPublicUrl(data.avatarUrl);
+    if (!path || !path.startsWith(`${req.user!.userId}/`)) {
+      throw new AppError(
+        400,
+        "BAD_REQUEST",
+        "avatarUrl must be an avatar uploaded by this account",
+      );
+    }
+    const before = await prisma.user.findUnique({
+      where: { id: req.user!.userId },
+      select: { avatarUrl: true },
+    });
+    previousAvatarUrl = before?.avatarUrl ?? null;
+  }
+
   const user = await prisma.user.update({
     where: { id: req.user!.userId },
     data,
     omit: PRIVATE_FIELDS,
   });
+
+  // Best-effort cleanup of the replaced avatar object; never fails the request.
+  if (previousAvatarUrl && previousAvatarUrl !== user.avatarUrl) {
+    const oldPath = avatarPathFromPublicUrl(previousAvatarUrl);
+    if (oldPath) void removeAvatarObject(oldPath);
+  }
 
   res.json(user);
 });
@@ -170,7 +203,26 @@ router.patch("/me", requireAuth, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 router.delete("/me", requireAuth, async (req: Request, res: Response) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user!.userId },
+    select: { email: true, avatarUrl: true },
+  });
+  if (!user) {
+    throw new AppError(404, "NOT_FOUND", "User not found");
+  }
+
+  // Revoke refresh tokens before the row goes away — the cascade would get
+  // them anyway, but this makes the cutoff immediate and explicit.
+  await deleteAllSessionsForUser(req.user!.userId);
   await prisma.user.delete({ where: { id: req.user!.userId } });
+
+  // Best-effort: orphaned-avatar cleanup + farewell confirmation.
+  if (user.avatarUrl) {
+    const path = avatarPathFromPublicUrl(user.avatarUrl);
+    if (path) void removeAvatarObject(path);
+  }
+  void sendAccountDeletedEmail(user.email);
+
   res.json({ message: "Account deleted" });
 });
 

@@ -45,6 +45,15 @@ describe("loginBodySchema", () => {
     expect(r.success).toBe(false);
   });
 
+  it("accepts username-only login (non-email identifier)", () => {
+    const r = loginBodySchema.safeParse({ username: "luca_l", password: "p" });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.username).toBe("luca_l");
+      expect(r.data.email).toBeUndefined();
+    }
+  });
+
   it("accepts nested user shape after preprocess", () => {
     const r = loginBodySchema.safeParse({ user: { email: "a@b.com", password: "p" } });
     expect(r.success).toBe(true);
