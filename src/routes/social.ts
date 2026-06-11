@@ -529,6 +529,74 @@ router.get("/friends", requireAuth, async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /social/friends/hot-items
+// Items that >= minFriends of the caller's friends LIKE/LOVE'd recently.
+// Powers the iOS "your friends found something" local notification.
+// ---------------------------------------------------------------------------
+
+const hotItemsQuerySchema = z.object({
+  minFriends: z.coerce.number().int().min(2).max(50).default(2),
+  days: z.coerce.number().int().min(1).max(30).default(7),
+  limit: z.coerce.number().int().min(1).max(20).default(10),
+});
+
+router.get("/friends/hot-items", requireAuth, async (req: Request, res: Response) => {
+  const { minFriends, days, limit } = hotItemsQuerySchema.parse(req.query);
+  const me = req.user!.userId;
+  const blocked = [...(await getBlockedUserIdSet(me))];
+
+  const friendships = await prisma.friendRequest.findMany({
+    where: {
+      status: "ACCEPTED",
+      OR: [
+        { fromUserId: me, toUserId: { notIn: blocked } },
+        { fromUserId: { notIn: blocked }, toUserId: me },
+      ],
+    },
+    select: { fromUserId: true, toUserId: true },
+  });
+  const friendIds = friendships.map((f) => (f.fromUserId === me ? f.toUserId : f.fromUserId));
+
+  if (friendIds.length < minFriends) {
+    res.json({ items: [] });
+    return;
+  }
+
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  // One swipe per (user, item) is enforced by the unique constraint, so the
+  // userId count per item equals the distinct-friend count.
+  const grouped = await prisma.swipe.groupBy({
+    by: ["itemId"],
+    where: {
+      userId: { in: friendIds },
+      action: { in: ["LIKE", "LOVE"] },
+      createdAt: { gte: since },
+    },
+    _count: { userId: true },
+    having: { userId: { _count: { gte: minFriends } } },
+    orderBy: { _count: { userId: "desc" } },
+    take: limit,
+  });
+
+  if (grouped.length === 0) {
+    res.json({ items: [] });
+    return;
+  }
+
+  const countByItemId = new Map(grouped.map((g) => [g.itemId, g._count.userId]));
+  const rows = await prisma.clothingItem.findMany({
+    where: { id: { in: [...countByItemId.keys()] }, active: true },
+  });
+
+  const items = rows
+    .map((item) => ({ item, friendCount: countByItemId.get(item.id) ?? 0 }))
+    .sort((a, b) => b.friendCount - a.friendCount);
+
+  res.json({ items });
+});
+
+// ---------------------------------------------------------------------------
 // GET /social/pending
 // ---------------------------------------------------------------------------
 
