@@ -17,10 +17,17 @@ process.env.APP_URL ??= "http://localhost:3000";
 process.env.RESEND_API_KEY ??= "re_integration_test_dummy";
 
 // Outbound email would hit the real Resend API with the dummy key and fail the
-// request. Tests only need the send calls to succeed.
+// request. Tests only need the send calls to succeed. NOTE: vi.mock replaces
+// the WHOLE module — every exported sender must be stubbed here, or routes
+// that call a missing one will 500 with "undefined is not a function".
 vi.mock("../../src/lib/email.js", () => ({
   sendPasswordResetEmail: vi.fn(async () => {}),
   sendVerificationEmail: vi.fn(async () => {}),
+  sendPasswordChangedEmail: vi.fn(async () => {}),
+  sendWelcomeEmail: vi.fn(async () => {}),
+  sendSignInMethodAddedEmail: vi.fn(async () => {}),
+  sendAccountDeletedEmail: vi.fn(async () => {}),
+  renderEmail: vi.fn(() => "<html></html>"),
 }));
 
 const { validateEnv } = await import("../../src/lib/env.js");
