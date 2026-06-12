@@ -689,6 +689,55 @@ router.post("/block/:userId", requireAuth, async (req: Request, res: Response) =
 });
 
 // ---------------------------------------------------------------------------
+// POST /social/report/:userId
+// ---------------------------------------------------------------------------
+
+const REPORT_REASONS = [
+  "harassment",
+  "spam",
+  "inappropriate_content",
+  "impersonation",
+  "scam",
+  "other",
+] as const;
+
+const reportSchema = z.object({
+  reason: z.enum(REPORT_REASONS),
+  details: z.string().trim().max(1000).optional(),
+});
+
+router.post("/report/:userId", requireAuth, async (req: Request, res: Response) => {
+  const targetId = req.params.userId as string;
+  const me = req.user!.userId;
+  const { reason, details } = reportSchema.parse(req.body);
+
+  if (targetId === me) {
+    throw new AppError(400, "BAD_REQUEST", "Cannot report yourself");
+  }
+
+  await findUserOrThrow(targetId);
+
+  // One open report per reporter/target pair: repeated taps refresh the
+  // existing report instead of piling up duplicate rows.
+  const existing = await prisma.userReport.findFirst({
+    where: { reporterId: me, reportedUserId: targetId, status: "open" },
+  });
+  const report = existing
+    ? await prisma.userReport.update({
+        where: { id: existing.id },
+        data: { reason, details: details ?? null },
+      })
+    : await prisma.userReport.create({
+        data: { reporterId: me, reportedUserId: targetId, reason, details: details ?? null },
+      });
+
+  // Surface in Railway logs so reports are noticed without a dashboard.
+  req.log.warn({ reportId: report.id, reportedUserId: targetId, reason }, "User report filed");
+
+  res.status(201).json({ reported: true, reportId: report.id });
+});
+
+// ---------------------------------------------------------------------------
 // DELETE /social/block/:userId
 // ---------------------------------------------------------------------------
 

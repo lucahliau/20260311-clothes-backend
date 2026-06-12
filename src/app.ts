@@ -21,6 +21,7 @@ import collectionsRouter from "./routes/collections.js";
 import socialRouter from "./routes/social.js";
 import messagesRouter from "./routes/messages.js";
 import diagnosticsRouter from "./routes/diagnostics.js";
+import legalRouter from "./routes/legal.js";
 
 function hashResetToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -354,6 +355,10 @@ export function createApp(): express.Express {
       res.status(503).json({ status: "not_ready", checks: { db: "error" } });
     }
   });
+
+  // Public legal pages (/privacy, /terms) — linked from the App Store listing
+  // and the app's Settings screen. Root-level and unversioned like /health.
+  app.use(legalRouter);
 
   app.get("/.well-known/apple-app-site-association", (_req, res) => {
     const appId = getAppleUniversalLinkAppId();

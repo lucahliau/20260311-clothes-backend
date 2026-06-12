@@ -33,6 +33,12 @@ import {
 
 const router = Router();
 
+// Auth responses carry tokens — make sure no intermediary ever caches them.
+router.use((_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 const BCRYPT_ROUNDS = 12;
 // Longer than the old 15m: a backgrounded app shouldn't trigger a refresh
 // every time the user re-opens it. Refresh tokens still get rotated on use,

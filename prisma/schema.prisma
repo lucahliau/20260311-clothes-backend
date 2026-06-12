@@ -49,6 +49,27 @@ model User {
   blocksReceived         UserBlock[]    @relation("UserBlockedBy")
   conversationParticipants ConversationParticipant[]
   sentMessages           Message[]
+  reportsFiled           UserReport[]   @relation("ReportsFiled")
+  reportsReceived        UserReport[]   @relation("ReportsReceived")
+}
+
+/// A user-filed abuse report against another user (App Store guideline 1.2
+/// requires a report mechanism alongside blocking). Reviewed out-of-band;
+/// `status` moves open → reviewed/actioned via scripts/list-reports.ts.
+model UserReport {
+  id             String   @id @default(uuid())
+  reporterId     String
+  reportedUserId String
+  reason         String
+  details        String?
+  status         String   @default("open")
+  createdAt      DateTime @default(now())
+
+  reporter     User @relation("ReportsFiled", fields: [reporterId], references: [id], onDelete: Cascade)
+  reportedUser User @relation("ReportsReceived", fields: [reportedUserId], references: [id], onDelete: Cascade)
+
+  @@index([reportedUserId])
+  @@index([status, createdAt])
 }
 
 /// Per-device refresh-token session. Replaces the single `User.refreshTokenHash`
