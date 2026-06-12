@@ -575,12 +575,18 @@ router.post("/apple", authLimiter, async (req: Request, res: Response) => {
   if (!clientId) {
     throw new AppError(503, "SERVICE_UNAVAILABLE", "Apple Sign-In is not configured");
   }
+  // Comma-separated list supported so old and new bundle ids can both sign
+  // in while a bundle-id migration is in flight.
+  const audiences = clientId
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   let applePayload: jose.JWTPayload;
   try {
     const { payload } = await jose.jwtVerify(identityToken, getAppleJwks(), {
       issuer: APPLE_ISSUER,
-      audience: clientId,
+      audience: audiences,
     });
     applePayload = payload;
   } catch {
