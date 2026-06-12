@@ -33,16 +33,13 @@ router.post("/", requireAuth, swipeLimiter, async (req: Request, res: Response) 
     throw new AppError(404, "NOT_FOUND", "Item not found");
   }
 
-  const existing = await prisma.swipe.findUnique({
+  // Idempotent: re-swiping an item updates the stored action instead of
+  // 409ing. The shipped app re-presents a card whose swipe POST failed, so a
+  // 409 left users stuck on the same card forever.
+  const swipe = await prisma.swipe.upsert({
     where: { userId_itemId: { userId, itemId } },
-  });
-
-  if (existing) {
-    throw new AppError(409, "CONFLICT", "You have already swiped on this item");
-  }
-
-  const swipe = await prisma.swipe.create({
-    data: { userId, itemId, action },
+    create: { userId, itemId, action },
+    update: { action },
     include: { item: true },
   });
 

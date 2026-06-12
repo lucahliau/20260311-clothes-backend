@@ -12,7 +12,7 @@ describe("swipes", () => {
     itemIds = (await seedItems(5)).map((i) => i.id);
   });
 
-  it("creates a swipe, rejects duplicates with 409, and 404s unknown items", async () => {
+  it("creates a swipe, upserts duplicates idempotently, and 404s unknown items", async () => {
     const created = await request(app())
       .post("/swipes")
       .set(auth(user.accessToken))
@@ -20,12 +20,15 @@ describe("swipes", () => {
     expect(created.status).toBe(201);
     expect(created.body.action).toBe("LOVE");
 
+    // Re-swiping the same item must not 409 (the app would re-present the
+    // card forever) — it updates the stored action in place.
     const dupe = await request(app())
       .post("/swipes")
       .set(auth(user.accessToken))
       .send({ itemId: itemIds[0], action: "LIKE" });
-    expect(dupe.status).toBe(409);
-    expect(dupe.body.error.code).toBe("CONFLICT");
+    expect(dupe.status).toBe(201);
+    expect(dupe.body.action).toBe("LIKE");
+    expect(dupe.body.id).toBe(created.body.id);
 
     const ghost = await request(app())
       .post("/swipes")
