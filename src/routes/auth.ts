@@ -568,13 +568,15 @@ router.post("/resend-verification", authLimiter, async (req: Request, res: Respo
 // { "identityToken": "<jwt>", "fullName": { "givenName"?, "familyName"? } } (fullName only on first sign-in).
 // APPLE_CLIENT_ID must match the token audience (your App ID / bundle ID, or Services ID for web).
 
+// Bundle ids are public identifiers, not secrets — default to the app's known
+// ids so a missing Railway env var can't take down Apple Sign-In. The env var
+// still overrides (e.g. to add a Services ID for web).
+const DEFAULT_APPLE_AUDIENCES = "com.clothedd.app,organizationname.-0260312v2clothingfrontend";
+
 router.post("/apple", authLimiter, async (req: Request, res: Response) => {
   const { identityToken, fullName, deviceId } = appleAuthSchema.parse(req.body);
 
-  const clientId = process.env.APPLE_CLIENT_ID;
-  if (!clientId) {
-    throw new AppError(503, "SERVICE_UNAVAILABLE", "Apple Sign-In is not configured");
-  }
+  const clientId = process.env.APPLE_CLIENT_ID || DEFAULT_APPLE_AUDIENCES;
   // Comma-separated list supported so old and new bundle ids can both sign
   // in while a bundle-id migration is in flight.
   const audiences = clientId
