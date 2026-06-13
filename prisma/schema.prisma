@@ -307,6 +307,26 @@ model ScrapedRaw {
   @@index([processed])
 }
 
+/// Append-only product-analytics events from the iOS app (sessions, screen
+/// views, item views, searches). Deliberately NOT FK'd to User: events survive
+/// account deletion so retention/cohort math stays correct, and `userId` is
+/// null for pre-login events. Never read on the app's hot path — the crawler
+/// dashboard aggregates this table off-band over the shared Supabase DB.
+model AnalyticsEvent {
+  id         String    @id @default(uuid())
+  userId     String?
+  sessionId  String
+  eventName  String
+  screenName String?
+  metadata   Json?
+  clientTs   DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([eventName, createdAt])
+  @@index([userId, createdAt])
+  @@index([sessionId])
+}
+
 /// Per-item embedding vectors (pgvector). `vector` column is vector(512) in DB for CLIP ViT-B-32 image embeddings.
 model ItemEmbedding {
   id         String   @id @default(uuid())

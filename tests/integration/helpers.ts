@@ -19,6 +19,7 @@ export async function resetDb(): Promise<void> {
       "UserBlock", "FriendRequest", "Follow",
       "CollectionItem", "Collection", "Swipe",
       "ItemEmbedding", "ScrapedRaw", "DeviceToken", "Session",
+      "AnalyticsEvent",
       "ClothingItem", "User"
     RESTART IDENTITY CASCADE
   `);

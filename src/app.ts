@@ -21,6 +21,7 @@ import collectionsRouter from "./routes/collections.js";
 import socialRouter from "./routes/social.js";
 import messagesRouter from "./routes/messages.js";
 import diagnosticsRouter from "./routes/diagnostics.js";
+import analyticsRouter from "./routes/analytics.js";
 import legalRouter from "./routes/legal.js";
 
 function hashResetToken(token: string): string {
@@ -454,6 +455,7 @@ export function createApp(): express.Express {
     ["/social", socialRouter],
     ["/messages", messagesRouter],
     ["/diagnostics", diagnosticsRouter],
+    ["/analytics", analyticsRouter],
   ] as const;
   for (const [path, router] of apiRouters) {
     app.use(`/v1${path}`, router);

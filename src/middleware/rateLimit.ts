@@ -48,3 +48,17 @@ export const swipeLimiter = rateLimit({
   skip: skipInTests,
   message: { error: { code: "RATE_LIMITED", message: "Too many swipes, slow down" } },
 });
+
+// Analytics events arrive batched (the app flushes up to 100 per request), so
+// this is intentionally generous — it's a runaway-client backstop, not a
+// throttle. Keyed per-user when authed, per-IP otherwise (events may be
+// pre-login). Runs after optionalAuth.
+export const analyticsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
+  keyGenerator: (req) => req.user?.userId ?? req.ip ?? "anon",
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  skip: skipInTests,
+  message: { error: { code: "RATE_LIMITED", message: "Too many analytics events" } },
+});
