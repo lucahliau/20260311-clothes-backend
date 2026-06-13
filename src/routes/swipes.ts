@@ -5,8 +5,15 @@ import { requireAuth } from "../middleware/auth.js";
 import { swipeLimiter } from "../middleware/rateLimit.js";
 import { AppError } from "../middleware/error.js";
 import { invalidateUserClusters } from "../services/feed-personalization.js";
+import { withCdnImages } from "../lib/imageCdn.js";
+import type { ClothingItem } from "../../generated/prisma/client.js";
 
 const router = Router();
+
+/** Rewrite the embedded item's image URLs onto the CDN (no-op when IMG_CDN_HOST unset). */
+function withCdnItem<T extends { item: ClothingItem }>(swipe: T): T {
+  return { ...swipe, item: withCdnImages(swipe.item) };
+}
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -44,7 +51,7 @@ router.post("/", requireAuth, swipeLimiter, async (req: Request, res: Response) 
   });
 
   invalidateUserClusters(userId);
-  res.status(201).json(swipe);
+  res.status(201).json(withCdnItem(swipe));
 });
 
 // ---------------------------------------------------------------------------
@@ -75,7 +82,7 @@ router.get("/history", requireAuth, async (req: Request, res: Response) => {
   ]);
 
   res.json({
-    swipes,
+    swipes: swipes.map(withCdnItem),
     pagination: {
       page,
       limit,
@@ -103,7 +110,7 @@ router.delete("/last", requireAuth, async (req: Request, res: Response) => {
   await prisma.swipe.delete({ where: { id: lastSwipe.id } });
 
   invalidateUserClusters(req.user!.userId);
-  res.json({ message: "Last swipe undone", undone: lastSwipe });
+  res.json({ message: "Last swipe undone", undone: withCdnItem(lastSwipe) });
 });
 
 // ---------------------------------------------------------------------------
@@ -133,7 +140,7 @@ router.patch("/:id", requireAuth, async (req: Request, res: Response) => {
   });
 
   invalidateUserClusters(userId);
-  res.json(swipe);
+  res.json(withCdnItem(swipe));
 });
 
 export default router;

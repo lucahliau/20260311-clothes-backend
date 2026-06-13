@@ -5,6 +5,7 @@ import { isBlockedPair as checkBlockedPair, getBlockedUserIdSet } from "../lib/s
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { notifySocialEvent } from "../lib/socialNotifications.js";
+import { withCdnImages } from "../lib/imageCdn.js";
 import type { FriendRequestStatus } from "../../generated/prisma/client.js";
 
 const router = Router();
@@ -590,7 +591,7 @@ router.get("/friends/hot-items", requireAuth, async (req: Request, res: Response
   });
 
   const items = rows
-    .map((item) => ({ item, friendCount: countByItemId.get(item.id) ?? 0 }))
+    .map((item) => ({ item: withCdnImages(item), friendCount: countByItemId.get(item.id) ?? 0 }))
     .sort((a, b) => b.friendCount - a.friendCount);
 
   res.json({ items });

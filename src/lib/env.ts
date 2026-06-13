@@ -37,6 +37,11 @@ const envSchema = z.object({
 
   R2_PUBLIC_URL: z.string().url().optional(),
 
+  /** Custom domain on the R2 bucket with Cloudflare Image Transformations enabled
+   * (e.g. img.clothedd.com). When set, item image URLs are rewritten to resized,
+   * edge-cached /cdn-cgi/image/ variants. Unset = serve stored URLs as-is. */
+  IMG_CDN_HOST: z.string().optional(),
+
   // Observability — all optional. When SENTRY_DSN is unset Sentry is a no-op.
   SENTRY_DSN: z.string().optional(),
   SENTRY_ENVIRONMENT: z.string().optional(),

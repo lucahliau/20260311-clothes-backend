@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { isBlockedPair, getBlockedUserIdSet } from "../lib/social.js";
+import { cdnImageUrl } from "../lib/imageCdn.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { sendPushToUser } from "../lib/apns.js";
@@ -220,7 +221,7 @@ function serializeMessage(
     senderId: m.senderId,
     content: m.content,
     itemId: m.itemId,
-    item: m.item ?? null,
+    item: m.item ? { ...m.item, imageUrl: cdnImageUrl(m.item.imageUrl) ?? m.item.imageUrl } : null,
     createdAt: m.createdAt.toISOString(),
     isOwn: m.senderId === viewerId,
   };
@@ -294,7 +295,9 @@ router.get("/conversations", requireAuth, async (req: Request, res: Response) =>
           id: last.id,
           content: last.content,
           itemId: last.itemId,
-          item: last.item,
+          item: last.item
+            ? { ...last.item, imageUrl: cdnImageUrl(last.item.imageUrl) ?? last.item.imageUrl }
+            : null,
           senderId: last.senderId,
           createdAt: last.createdAt.toISOString(),
         };

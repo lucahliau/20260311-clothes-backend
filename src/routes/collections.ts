@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import { withCdnImages } from "../lib/imageCdn.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 
@@ -82,7 +83,10 @@ router.get("/:id", async (req: Request, res: Response) => {
     throw new AppError(404, "NOT_FOUND", "Collection not found");
   }
 
-  res.json(collection);
+  res.json({
+    ...collection,
+    items: collection.items.map((ci) => ({ ...ci, item: withCdnImages(ci.item) })),
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -157,7 +161,7 @@ router.post("/:id/items", async (req: Request, res: Response) => {
     include: { item: true },
   });
 
-  res.status(201).json(collectionItem);
+  res.status(201).json({ ...collectionItem, item: withCdnImages(collectionItem.item) });
 });
 
 // ---------------------------------------------------------------------------

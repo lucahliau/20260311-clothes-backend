@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import cors from "cors";
 import helmet from "helmet";
 import crypto from "crypto";
@@ -331,6 +332,9 @@ export function createApp(): express.Express {
 
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+  // Feed responses are large, repetitive JSON (~500KB+ for 20 items) — gzip
+  // cuts them 5-10x. URLSession on iOS decompresses transparently.
+  app.use(compression());
   app.use(globalLimiter);
 
   app.get("/health", async (req, res) => {

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
+import { cdnImageUrl, withCdnImages } from "../lib/imageCdn.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import {
@@ -8,6 +9,43 @@ import {
   type FeedFilters,
   type FeedMatch,
 } from "../services/feed-personalization.js";
+
+/** Wire shape for feed items: only the fields the iOS `Item` model actually
+ * reads (all its keys decode via decodeIfPresent, so dropping unused columns —
+ * metadata, externalId, manufacturerCode, lastVerifiedAt, subcategory, sizes,
+ * tags, active, updatedAt, hasNobg — is additive-safe for shipped builds and
+ * cuts payload + client decode time). */
+function toFeedItem(item: ClothingItem) {
+  const slim = {
+    id: item.id,
+    name: item.name,
+    description: item.description,
+    brand: item.brand,
+    category: item.category,
+    price: item.price,
+    currency: item.currency,
+    imageUrl: item.imageUrl,
+    images: item.images,
+    colors: item.colors,
+    gender: item.gender,
+    productType: item.productType,
+    sourceUrl: item.sourceUrl,
+    retailer: item.retailer,
+    createdAt: item.createdAt,
+  };
+  return withCdnImages(slim);
+}
+
+/** Rewrite contributor thumbnails ("because you liked…" UI) onto the CDN too. */
+function toWireMatch(match: FeedMatch): FeedMatch {
+  return {
+    ...match,
+    topContributors: match.topContributors.map((c) => ({
+      ...c,
+      imageUrl: cdnImageUrl(c.imageUrl) ?? c.imageUrl,
+    })),
+  };
+}
 
 const router = Router();
 
@@ -86,7 +124,7 @@ router.get("/", async (req: Request, res: Response) => {
   ]);
 
   res.json({
-    items,
+    items: items.map(withCdnImages),
     pagination: {
       page,
       limit,
@@ -122,8 +160,8 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   try {
     const entries = await buildPersonalizedFeed({ userId, limit, filters });
     if (entries.length > 0) {
-      const items = entries.map((e) => e.item);
-      const matches: FeedMatch[] = entries.map((e) => e.match);
+      const items = entries.map((e) => toFeedItem(e.item));
+      const matches: FeedMatch[] = entries.map((e) => toWireMatch(e.match));
       res.json({ items, matches, remaining: items.length });
       return;
     }
@@ -171,9 +209,10 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     where: { id: { in: idOrder } },
   });
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const items: ClothingItem[] = idOrder
+  const items = idOrder
     .map((id) => byId.get(id))
-    .filter((x): x is ClothingItem => x !== undefined);
+    .filter((x): x is ClothingItem => x !== undefined)
+    .map(toFeedItem);
 
   // Fallback path has no embedding/clustering signal, so all matches are
   // tagged as random so the client still gets a coherent response shape.
@@ -204,7 +243,7 @@ router.get("/:id", async (req: Request, res: Response) => {
     throw new AppError(404, "NOT_FOUND", "Item not found");
   }
 
-  res.json(item);
+  res.json(withCdnImages(item));
 });
 
 export default router;

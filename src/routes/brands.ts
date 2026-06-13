@@ -17,27 +17,45 @@ const MAX_EXPLORE_LIMIT = 100_000;
 // GET /brands/explore
 // ---------------------------------------------------------------------------
 
-router.get("/explore", async (req: Request, res: Response) => {
-  const limit = Math.min(
-    MAX_EXPLORE_LIMIT,
-    Math.max(1, Number(req.query.limit) || DEFAULT_EXPLORE_LIMIT),
-  );
+// The grouped (brand, count) rows only change when the crawler uploads, but the
+// GROUP BY scans the whole catalog — cache the groups briefly and shuffle in JS
+// per request so the response stays random.
+const EXPLORE_CACHE_TTL_MS = 60_000;
+let exploreCache: { rows: { brand: string; productCount: number }[]; expiresAt: number } | null =
+  null;
+
+async function getExploreBrandGroups(): Promise<{ brand: string; productCount: number }[]> {
+  const now = Date.now();
+  if (exploreCache && exploreCache.expiresAt > now) return exploreCache.rows;
 
   const rows = await prisma.$queryRaw<{ brand: string; productCount: bigint }[]>`
     SELECT brand, COUNT(*)::bigint AS "productCount"
     FROM "ClothingItem"
     WHERE active = true
     GROUP BY brand
-    ORDER BY RANDOM()
-    LIMIT ${limit}
   `;
+  const mapped = rows.map((r) => ({ brand: r.brand, productCount: Number(r.productCount) }));
+  exploreCache = { rows: mapped, expiresAt: now + EXPLORE_CACHE_TTL_MS };
+  return mapped;
+}
 
-  res.json({
-    brands: rows.map((r) => ({
-      brand: r.brand,
-      productCount: Number(r.productCount),
-    })),
-  });
+router.get("/explore", async (req: Request, res: Response) => {
+  const limit = Math.min(
+    MAX_EXPLORE_LIMIT,
+    Math.max(1, Number(req.query.limit) || DEFAULT_EXPLORE_LIMIT),
+  );
+
+  const groups = await getExploreBrandGroups();
+
+  // Fisher-Yates over a copy, then take the first `limit`.
+  const shuffled = [...groups];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+
+  res.setHeader("Cache-Control", "private, max-age=60");
+  res.json({ brands: shuffled.slice(0, limit) });
 });
 
 // ---------------------------------------------------------------------------
