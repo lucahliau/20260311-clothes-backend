@@ -78,6 +78,16 @@ function parseProductType(val: unknown): string | null {
   return VALID_PRODUCT_TYPES.has(p) ? p : null;
 }
 
+/** Defense-in-depth: derive a gender filter from the signed-in user's profile
+ * gender when the client didn't send one, so the feed is gender-correct even if
+ * a client forgets the param. Mirrors the iOS default (male→[male,unisex]). */
+function profileGenderToFilter(profileGender: string | null | undefined): string[] | null {
+  const g = (profileGender ?? "").trim().toLowerCase();
+  if (g === "male" || g === "man" || g === "men") return ["male", "unisex"];
+  if (g === "female" || g === "woman" || g === "women") return ["female", "unisex"];
+  return null; // non-binary / unset / "everything" → no gender filter
+}
+
 // ---------------------------------------------------------------------------
 // GET /items
 // ---------------------------------------------------------------------------
@@ -87,7 +97,8 @@ router.get("/", async (req: Request, res: Response) => {
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
   const skip = (page - 1) * limit;
 
-  const where: Prisma.ClothingItemWhereInput = { active: true };
+  // active + not a classified non-wearable (NULL/unclassified stays visible).
+  const where: Prisma.ClothingItemWhereInput = { active: true, isClothing: { not: false } };
 
   if (req.query.category) where.category = String(req.query.category);
   if (req.query.subcategory) where.subcategory = String(req.query.subcategory);
@@ -150,7 +161,18 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     filters.category = req.query.category.trim();
   }
   const gender = parseGender(req.query.gender);
-  if (gender) filters.gender = gender;
+  if (gender) {
+    filters.gender = gender;
+  } else {
+    // Client sent no gender filter — fall back to the user's profile gender so
+    // a male user never gets women's items (and vice versa) by omission.
+    const profile = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { gender: true },
+    });
+    const profileFilter = profileGenderToFilter(profile?.gender);
+    if (profileFilter) filters.gender = profileFilter;
+  }
   const productType = parseProductType(req.query.productType);
   if (productType) filters.productType = productType;
 
@@ -178,7 +200,11 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   });
   const excludeIds = swipedItemIds.map((s) => s.itemId).filter((id) => UUID_REGEX.test(id));
 
-  const sqlWhere: Prisma.Sql[] = [Prisma.sql`active = true`, Prisma.sql`"hasNobg" = true`];
+  const sqlWhere: Prisma.Sql[] = [
+    Prisma.sql`active = true`,
+    Prisma.sql`"hasNobg" = true`,
+    Prisma.sql`"isClothing" IS NOT FALSE`,
+  ];
   if (excludeIds.length > 0) {
     sqlWhere.push(Prisma.sql`id NOT IN (${Prisma.join(excludeIds)})`);
   }

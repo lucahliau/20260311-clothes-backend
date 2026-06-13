@@ -155,7 +155,12 @@ function recencyWeight(createdAt: Date, now: number): number {
 }
 
 function buildItemFilterSql(excludeIds: string[], filters: FeedFilters): Prisma.Sql[] {
-  const clauses: Prisma.Sql[] = [Prisma.sql`ci.active = true`, Prisma.sql`ci."hasNobg" = true`];
+  const clauses: Prisma.Sql[] = [
+    Prisma.sql`ci.active = true`,
+    Prisma.sql`ci."hasNobg" = true`,
+    // Hide classified non-wearables; NULL (unclassified) stays visible.
+    Prisma.sql`ci."isClothing" IS NOT FALSE`,
+  ];
   if (excludeIds.length > 0) {
     clauses.push(Prisma.sql`ci.id NOT IN (${Prisma.join(excludeIds)})`);
   }

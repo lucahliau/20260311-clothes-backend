@@ -229,6 +229,12 @@ model ClothingItem {
   lastVerifiedAt   DateTime?
   active           Boolean  @default(true)
   hasNobg          Boolean?
+  // Heuristic classification (written by the crawler's classify.ts + backfill).
+  // isClothing=false soft-hides non-wearables (wallets, candles, camping gear…)
+  // from every feed/list. NULL = unclassified → treated as visible.
+  isClothing                Boolean?
+  classifiedAt              DateTime?
+  classificationConfidence  Float?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -244,6 +250,7 @@ model ClothingItem {
   @@index([productType])
   @@index([active])
   @@index([hasNobg])
+  @@index([isClothing])
   @@index([retailer])
 }
 

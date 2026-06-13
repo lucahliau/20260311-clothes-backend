@@ -1,6 +1,11 @@
 /**
- * Tags existing ClothingItems with gender and productType based on category/subcategory.
- * Defaults: unknown gender → unisex, unknown productType → other.
+ * DEPRECATED — superseded by the crawler's heuristic classifier
+ * (`20260315 crawlerconfig/src/classify.ts` + `scripts/classify-catalog.ts`),
+ * which resolves gender/productType AND clothing-vs-non-clothing from all text
+ * signals. This script's `unknown gender → unisex` default is the exact bug
+ * that leaked dresses/skirts into men's feeds, so re-running it would CLOBBER
+ * the good data. Kept only for reference; it refuses to run without
+ * `--force-legacy`.
  */
 import "dotenv/config";
 import { PrismaClient } from "../generated/prisma/client.js";
@@ -87,6 +92,14 @@ function _normalizeGender(gender: string | null): Gender {
 }
 
 async function main() {
+  if (!process.argv.includes("--force-legacy")) {
+    console.error(
+      "DEPRECATED: this legacy tagger defaults unknown gender → unisex and would\n" +
+        "overwrite the crawler's classification (re-leaking dresses into men's feeds).\n" +
+        "Use the crawler's scripts/classify-catalog.ts instead. Pass --force-legacy to override.",
+    );
+    process.exit(1);
+  }
   console.log("Fetching clothing items...\n");
 
   const items = await prisma.clothingItem.findMany({
