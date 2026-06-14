@@ -97,8 +97,14 @@ router.get("/", async (req: Request, res: Response) => {
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
   const skip = (page - 1) * limit;
 
-  // active + not a classified non-wearable (NULL/unclassified stays visible).
-  const where: Prisma.ClothingItemWhereInput = { active: true, isClothing: { not: false } };
+  const where: Prisma.ClothingItemWhereInput = { active: true };
+
+  // Hide classified non-wearables; NULL/unclassified stays visible. Prisma's
+  // field-level `not` excludes NULLs, so spell out the OR explicitly. Use AND[]
+  // so it composes with the search OR (a second top-level OR would clobber it).
+  const and: Prisma.ClothingItemWhereInput[] = [
+    { OR: [{ isClothing: true }, { isClothing: null }] },
+  ];
 
   if (req.query.category) where.category = String(req.query.category);
   if (req.query.subcategory) where.subcategory = String(req.query.subcategory);
@@ -117,12 +123,16 @@ router.get("/", async (req: Request, res: Response) => {
 
   if (req.query.search) {
     const term = String(req.query.search);
-    where.OR = [
-      { name: { contains: term, mode: "insensitive" } },
-      { description: { contains: term, mode: "insensitive" } },
-      { brand: { contains: term, mode: "insensitive" } },
-    ];
+    and.push({
+      OR: [
+        { name: { contains: term, mode: "insensitive" } },
+        { description: { contains: term, mode: "insensitive" } },
+        { brand: { contains: term, mode: "insensitive" } },
+      ],
+    });
   }
+
+  where.AND = and;
 
   const [items, total] = await Promise.all([
     prisma.clothingItem.findMany({
