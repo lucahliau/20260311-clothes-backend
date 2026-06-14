@@ -49,6 +49,21 @@ export const swipeLimiter = rateLimit({
   message: { error: { code: "RATE_LIMITED", message: "Too many swipes, slow down" } },
 });
 
+// Swipes arrive batched from the app (one request carries up to 100 swipes, and
+// the client paces flushes), so this is a generous runaway-client backstop, not
+// a per-swipe throttle like swipeLimiter. Per-user (must run after requireAuth).
+// A fast swiper produces only a handful of batch requests per minute; 300 leaves
+// large headroom for bursts/multi-device while still capping abuse.
+export const swipeBatchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  keyGenerator: (req) => req.user?.userId ?? req.ip ?? "anon",
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  skip: skipInTests,
+  message: { error: { code: "RATE_LIMITED", message: "Too many swipes, slow down" } },
+});
+
 // Analytics events arrive batched (the app flushes up to 100 per request), so
 // this is intentionally generous — it's a runaway-client backstop, not a
 // throttle. Keyed per-user when authed, per-IP otherwise (events may be

@@ -134,9 +134,46 @@ type UserClusters = {
 };
 
 const clusterCache = new Map<string, UserClusters>();
+// Users whose clusters are known to be out of date (a swipe landed since the
+// cached build). Tracked separately so we never DROP the cached clusters.
+const dirtyUsers = new Set<string>();
+// One build per user at a time — dedupes concurrent feed requests (and a
+// foreground cold-start request racing a background refresh).
+const inflightBuilds = new Map<string, Promise<UserClusters>>();
 
 export function invalidateUserClusters(userId: string): void {
-  clusterCache.delete(userId);
+  // Stale-while-revalidate: do NOT delete the cached clusters. Dropping them
+  // forces the next /items/feed to recompute k-means + per-cluster ANN
+  // synchronously — the ~3s stall users hit after a few swipes. Instead mark the
+  // entry dirty so getUserClusters serves it immediately and refreshes in the
+  // background. If nothing is cached yet, the next call cold-builds anyway.
+  if (clusterCache.has(userId)) dirtyUsers.add(userId);
+}
+
+/**
+ * Build (or rebuild) a user's clusters, populating the cache on success. Dedupes
+ * via inflightBuilds so concurrent callers share one build. The returned promise
+ * rejects on failure (foreground cold-start awaiters fall back to a random
+ * feed); a detached `.catch` keeps a background rebuild's rejection from
+ * surfacing as an unhandledRejection and leaves the stale entry in place.
+ */
+function startClusterBuild(userId: string): Promise<UserClusters> {
+  const existing = inflightBuilds.get(userId);
+  if (existing) return existing;
+  const p = buildUserClusters(userId).then((fresh) => {
+    clusterCache.set(userId, fresh);
+    dirtyUsers.delete(userId);
+    return fresh;
+  });
+  inflightBuilds.set(userId, p);
+  p.catch(() => {
+    // Keep any stale entry; clear dirty so we don't hot-loop a failing rebuild
+    // on every feed fetch (the TTL will prompt another attempt later).
+    dirtyUsers.delete(userId);
+  }).finally(() => {
+    inflightBuilds.delete(userId);
+  });
+  return p;
 }
 
 // ---------- helpers ----------
@@ -309,10 +346,16 @@ function hashStringToInt(s: string): number {
 
 async function getUserClusters(userId: string): Promise<UserClusters> {
   const cached = clusterCache.get(userId);
-  if (cached && Date.now() - cached.computedAt < CLUSTER_TTL_MS) return cached;
-  const fresh = await buildUserClusters(userId);
-  clusterCache.set(userId, fresh);
-  return fresh;
+  if (cached) {
+    const stale = Date.now() - cached.computedAt >= CLUSTER_TTL_MS;
+    // Refresh in the background but serve the (possibly stale) clusters now so
+    // the feed fetch stays fast. startClusterBuild's in-flight guard makes
+    // repeated triggers cheap.
+    if (stale || dirtyUsers.has(userId)) void startClusterBuild(userId);
+    return cached;
+  }
+  // Cold start: nothing cached yet, so we must build before personalizing.
+  return startClusterBuild(userId);
 }
 
 // ---------- candidate retrieval ----------

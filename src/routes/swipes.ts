@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
-import { swipeLimiter } from "../middleware/rateLimit.js";
+import { swipeLimiter, swipeBatchLimiter } from "../middleware/rateLimit.js";
 import { AppError } from "../middleware/error.js";
 import { invalidateUserClusters } from "../services/feed-personalization.js";
 import { withCdnImages } from "../lib/imageCdn.js";
@@ -21,6 +21,10 @@ const MAX_PAGE_SIZE = 100;
 const swipeSchema = z.object({
   itemId: z.string().uuid(),
   action: z.enum(["LOVE", "LIKE", "DISLIKE", "NEUTRAL"]),
+});
+
+const batchSwipeSchema = z.object({
+  swipes: z.array(swipeSchema).min(1).max(100),
 });
 
 const updateSwipeSchema = z.object({
@@ -52,6 +56,50 @@ router.post("/", requireAuth, swipeLimiter, async (req: Request, res: Response) 
 
   invalidateUserClusters(userId);
   res.status(201).json(withCdnItem(swipe));
+});
+
+// ---------------------------------------------------------------------------
+// POST /swipes/batch
+// ---------------------------------------------------------------------------
+// The app records swipes into a local queue and flushes them here in batches so
+// rapid swiping never trips the per-swipe limiter and the UI never waits on the
+// network. Idempotent (upsert, last action wins), and clusters are invalidated
+// ONCE per batch instead of once per swipe — which keeps the personalized feed
+// cache warm during active swiping (see feed-personalization SWR).
+
+router.post("/batch", requireAuth, swipeBatchLimiter, async (req: Request, res: Response) => {
+  const { swipes } = batchSwipeSchema.parse(req.body);
+  const userId = req.user!.userId;
+
+  // Dedupe by itemId (last action wins) so one transaction never upserts the
+  // same (userId,itemId) twice.
+  const byItem = new Map<string, (typeof swipes)[number]["action"]>();
+  for (const s of swipes) byItem.set(s.itemId, s.action);
+
+  // Keep only itemIds that still exist and are active; unknown/deactivated items
+  // are skipped rather than failing the whole batch (the queue may carry a swipe
+  // for an item that was since removed). Also avoids a foreign-key abort.
+  const existing = await prisma.clothingItem.findMany({
+    where: { id: { in: [...byItem.keys()] }, active: true },
+    select: { id: true },
+  });
+  const existingIds = new Set(existing.map((i) => i.id));
+  const recordable = [...byItem.entries()].filter(([itemId]) => existingIds.has(itemId));
+
+  if (recordable.length > 0) {
+    await prisma.$transaction(
+      recordable.map(([itemId, action]) =>
+        prisma.swipe.upsert({
+          where: { userId_itemId: { userId, itemId } },
+          create: { userId, itemId, action },
+          update: { action },
+        }),
+      ),
+    );
+    invalidateUserClusters(userId);
+  }
+
+  res.status(200).json({ accepted: recordable.length, skipped: byItem.size - recordable.length });
 });
 
 // ---------------------------------------------------------------------------
