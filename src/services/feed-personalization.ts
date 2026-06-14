@@ -133,13 +133,41 @@ type UserClusters = {
   computedAt: number;
 };
 
+// Bounded LRU (insertion-ordered Map; the oldest key is least-recently-used).
+// Capped so a growing user base can't leak memory on a long-lived process — a
+// cold miss just rebuilds that user's clusters on their next feed fetch.
 const clusterCache = new Map<string, UserClusters>();
+const MAX_CACHED_USERS = 5000;
 // Users whose clusters are known to be out of date (a swipe landed since the
 // cached build). Tracked separately so we never DROP the cached clusters.
 const dirtyUsers = new Set<string>();
 // One build per user at a time — dedupes concurrent feed requests (and a
 // foreground cold-start request racing a background refresh).
 const inflightBuilds = new Map<string, Promise<UserClusters>>();
+
+/** Insert/refresh a user's clusters, evicting the least-recently-used entry
+ *  once the cache exceeds MAX_CACHED_USERS. */
+function cacheUserClusters(userId: string, clusters: UserClusters): void {
+  clusterCache.set(userId, clusters);
+  if (clusterCache.size > MAX_CACHED_USERS) {
+    const oldest = clusterCache.keys().next().value;
+    if (oldest !== undefined && oldest !== userId) {
+      clusterCache.delete(oldest);
+      dirtyUsers.delete(oldest);
+    }
+  }
+}
+
+/** Read a user's cached clusters, bumping the entry to most-recently-used so
+ *  active users aren't evicted ahead of idle ones. */
+function readUserClusters(userId: string): UserClusters | undefined {
+  const entry = clusterCache.get(userId);
+  if (entry) {
+    clusterCache.delete(userId);
+    clusterCache.set(userId, entry);
+  }
+  return entry;
+}
 
 export function invalidateUserClusters(userId: string): void {
   // Stale-while-revalidate: do NOT delete the cached clusters. Dropping them
@@ -161,7 +189,7 @@ function startClusterBuild(userId: string): Promise<UserClusters> {
   const existing = inflightBuilds.get(userId);
   if (existing) return existing;
   const p = buildUserClusters(userId).then((fresh) => {
-    clusterCache.set(userId, fresh);
+    cacheUserClusters(userId, fresh);
     dirtyUsers.delete(userId);
     return fresh;
   });
@@ -345,7 +373,7 @@ function hashStringToInt(s: string): number {
 }
 
 async function getUserClusters(userId: string): Promise<UserClusters> {
-  const cached = clusterCache.get(userId);
+  const cached = readUserClusters(userId);
   if (cached) {
     const stale = Date.now() - cached.computedAt >= CLUSTER_TTL_MS;
     // Refresh in the background but serve the (possibly stale) clusters now so
