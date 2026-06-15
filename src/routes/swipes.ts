@@ -113,9 +113,27 @@ router.get("/history", requireAuth, async (req: Request, res: Response) => {
 
   const where: Record<string, unknown> = { userId: req.user!.userId };
 
-  const actionFilter = req.query.action as string | undefined;
-  if (actionFilter && ["LOVE", "LIKE", "DISLIKE", "NEUTRAL"].includes(actionFilter)) {
-    where.action = actionFilter;
+  // `action` accepts one value (`?action=LOVE`) or a comma-separated list
+  // (`?action=LOVE,LIKE`) — the latter backs the Wardrobe, which pulls the
+  // whole favorited closet in one filtered query instead of slicing it out of
+  // the recency-windowed mixed history. Unknown tokens are dropped; an
+  // empty/garbage value falls through to "all actions" (unchanged default).
+  const validActions = ["LOVE", "LIKE", "DISLIKE", "NEUTRAL"];
+  const actionParam = typeof req.query.action === "string" ? req.query.action : undefined;
+  if (actionParam) {
+    const actions = [
+      ...new Set(
+        actionParam
+          .split(",")
+          .map((a) => a.trim().toUpperCase())
+          .filter((a) => validActions.includes(a)),
+      ),
+    ];
+    if (actions.length === 1) {
+      where.action = actions[0];
+    } else if (actions.length > 1) {
+      where.action = { in: actions };
+    }
   }
 
   const [swipes, total] = await Promise.all([
