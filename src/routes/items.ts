@@ -118,7 +118,8 @@ router.get("/", async (req: Request, res: Response) => {
       Prisma.sql`"isClothing" IS NOT FALSE`,
     ];
     if (req.query.category) clauses.push(Prisma.sql`category = ${String(req.query.category)}`);
-    if (req.query.subcategory) clauses.push(Prisma.sql`subcategory = ${String(req.query.subcategory)}`);
+    if (req.query.subcategory)
+      clauses.push(Prisma.sql`subcategory = ${String(req.query.subcategory)}`);
     if (req.query.brand) clauses.push(Prisma.sql`brand = ${String(req.query.brand)}`);
     const sGender = parseGender(req.query.gender);
     if (sGender) {
