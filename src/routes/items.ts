@@ -6,6 +6,8 @@ import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import {
   buildPersonalizedFeed,
+  buildItemFilterSql,
+  EMBEDDING_MODEL,
   type FeedFilters,
   type FeedMatch,
 } from "../services/feed-personalization.js";
@@ -97,6 +99,82 @@ router.get("/", async (req: Request, res: Response) => {
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
   const skip = (page - 1) * limit;
 
+  // Relevance-ranked text search. The plain Prisma path below orders by
+  // createdAt desc, so an exact brand/name hit loses to a fresher incidental
+  // mention. When a search term is present, rank by match quality
+  // (exact > prefix > contains) and tie-break by recency, backed by the pg_trgm
+  // GIN indexes from migration 20260614000000_add_item_search_indexes.
+  if (typeof req.query.search === "string" && req.query.search.trim()) {
+    const term = req.query.search.trim();
+    // Escape LIKE wildcards so user input matches literally (parity with the
+    // previous Prisma `contains`, which treats % / _ as literals).
+    const escaped = term.replace(/[%_\\]/g, (m) => `\\${m}`);
+    const like = `%${escaped}%`;
+    const prefix = `${escaped}%`;
+
+    const clauses: Prisma.Sql[] = [
+      Prisma.sql`active = true`,
+      // Hide classified non-wearables; NULL/unclassified stays visible.
+      Prisma.sql`"isClothing" IS NOT FALSE`,
+    ];
+    if (req.query.category) clauses.push(Prisma.sql`category = ${String(req.query.category)}`);
+    if (req.query.subcategory) clauses.push(Prisma.sql`subcategory = ${String(req.query.subcategory)}`);
+    if (req.query.brand) clauses.push(Prisma.sql`brand = ${String(req.query.brand)}`);
+    const sGender = parseGender(req.query.gender);
+    if (sGender) {
+      clauses.push(
+        Array.isArray(sGender)
+          ? Prisma.sql`gender IN (${Prisma.join(sGender)})`
+          : Prisma.sql`gender = ${sGender}`,
+      );
+    }
+    const sProductType = parseProductType(req.query.productType);
+    if (sProductType) clauses.push(Prisma.sql`"productType" = ${sProductType}`);
+    if (req.query.minPrice) clauses.push(Prisma.sql`price >= ${Number(req.query.minPrice)}`);
+    if (req.query.maxPrice) clauses.push(Prisma.sql`price <= ${Number(req.query.maxPrice)}`);
+    clauses.push(
+      Prisma.sql`(name ILIKE ${like} OR description ILIKE ${like} OR brand ILIKE ${like})`,
+    );
+    const whereSql = Prisma.join(clauses, " AND ");
+
+    const relevance = Prisma.sql`
+      CASE
+        WHEN lower(name) = lower(${term}) OR lower(brand) = lower(${term}) THEN 3
+        WHEN name ILIKE ${prefix} OR brand ILIKE ${prefix} THEN 2
+        WHEN name ILIKE ${like} THEN 1
+        ELSE 0
+      END`;
+
+    const [idRows, countRows] = await Promise.all([
+      prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "ClothingItem"
+        WHERE ${whereSql}
+        ORDER BY ${relevance} DESC, "createdAt" DESC
+        LIMIT ${limit} OFFSET ${skip}
+      `,
+      prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count FROM "ClothingItem" WHERE ${whereSql}
+      `,
+    ]);
+
+    const idOrder = idRows.map((r) => r.id);
+    const found = idOrder.length
+      ? await prisma.clothingItem.findMany({ where: { id: { in: idOrder } } })
+      : [];
+    const byId = new Map(found.map((r) => [r.id, r]));
+    const rankedItems = idOrder
+      .map((id) => byId.get(id))
+      .filter((x): x is ClothingItem => x !== undefined)
+      .map(withCdnImages);
+    const total = Number(countRows[0]?.count ?? 0);
+
+    res.json({
+      items: rankedItems,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+    return;
+  }
+
   const where: Prisma.ClothingItemWhereInput = { active: true };
 
   // Hide classified non-wearables; NULL/unclassified stays visible. Prisma's
@@ -121,16 +199,7 @@ router.get("/", async (req: Request, res: Response) => {
     where.price = price;
   }
 
-  if (req.query.search) {
-    const term = String(req.query.search);
-    and.push({
-      OR: [
-        { name: { contains: term, mode: "insensitive" } },
-        { description: { contains: term, mode: "insensitive" } },
-        { brand: { contains: term, mode: "insensitive" } },
-      ],
-    });
-  }
+  // Text search is handled by the relevance-ranked raw path above (returns early).
 
   where.AND = and;
 
@@ -263,6 +332,87 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   }));
 
   res.json({ items, matches, remaining: items.length });
+});
+
+// ---------------------------------------------------------------------------
+// GET /items/:id/similar  — "More like this" via CLIP image-embedding ANN
+// ---------------------------------------------------------------------------
+
+router.get("/:id/similar", async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  if (!UUID_REGEX.test(id)) {
+    throw new AppError(400, "INVALID_ID", "Invalid item id");
+  }
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 12));
+
+  const filters: FeedFilters = {};
+  const gender = parseGender(req.query.gender);
+  if (gender) filters.gender = gender;
+
+  // Nearest neighbours by cosine distance on the item's own CLIP image vector.
+  // Reuses the feed's filter builder (active/hasNobg/isClothing/gender) and
+  // excludes the source item. Mirrors the literal-vector cast the feed uses so
+  // the HNSW index is hit. Falls back to same-brand recents when the item has
+  // no embedding (only active+hasNobg items get embedded).
+  let neighbourIds: string[] = [];
+  try {
+    const srcRows = await prisma.$queryRaw<{ vector: string }[]>`
+      SELECT vector::text AS vector
+      FROM "ItemEmbedding"
+      WHERE "itemId" = ${id} AND model = ${EMBEDDING_MODEL}
+      LIMIT 1
+    `;
+    const lit = srcRows[0]?.vector;
+    if (lit) {
+      const filterSql = Prisma.join(buildItemFilterSql([id], filters), " AND ");
+      const rows = await prisma.$queryRaw<{ itemId: string }[]>`
+        SELECT ie."itemId" AS "itemId"
+        FROM "ItemEmbedding" ie
+        JOIN "ClothingItem" ci ON ci.id = ie."itemId"
+        WHERE ie.model = ${EMBEDDING_MODEL} AND ${filterSql}
+        ORDER BY ie.vector <=> ${lit}::vector(512)
+        LIMIT ${limit}
+      `;
+      neighbourIds = rows.map((r) => r.itemId);
+    }
+  } catch (err) {
+    req.log.warn({ err }, "similar-items ANN query failed; falling back to brand");
+  }
+
+  if (neighbourIds.length > 0) {
+    const found = await prisma.clothingItem.findMany({
+      where: { id: { in: neighbourIds } },
+    });
+    const byId = new Map(found.map((r) => [r.id, r]));
+    const items = neighbourIds
+      .map((nid) => byId.get(nid))
+      .filter((x): x is ClothingItem => x !== undefined)
+      .map(toFeedItem);
+    res.json({ items });
+    return;
+  }
+
+  // Fallback: same brand, most recent, excluding self.
+  const src = await prisma.clothingItem.findUnique({
+    where: { id },
+    select: { brand: true },
+  });
+  if (!src) {
+    throw new AppError(404, "NOT_FOUND", "Item not found");
+  }
+  const fallback = src.brand
+    ? await prisma.clothingItem.findMany({
+        where: {
+          active: true,
+          id: { not: id },
+          brand: src.brand,
+          AND: [{ OR: [{ isClothing: true }, { isClothing: null }] }],
+        },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+      })
+    : [];
+  res.json({ items: fallback.map(toFeedItem) });
 });
 
 // ---------------------------------------------------------------------------

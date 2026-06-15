@@ -219,7 +219,7 @@ function recencyWeight(createdAt: Date, now: number): number {
   return Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
 }
 
-function buildItemFilterSql(excludeIds: string[], filters: FeedFilters): Prisma.Sql[] {
+export function buildItemFilterSql(excludeIds: string[], filters: FeedFilters): Prisma.Sql[] {
   const clauses: Prisma.Sql[] = [
     Prisma.sql`ci.active = true`,
     Prisma.sql`ci."hasNobg" = true`,
