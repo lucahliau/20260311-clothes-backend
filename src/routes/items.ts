@@ -116,6 +116,8 @@ router.get("/", async (req: Request, res: Response) => {
       Prisma.sql`active = true`,
       // Hide classified non-wearables; NULL/unclassified stays visible.
       Prisma.sql`"isClothing" IS NOT FALSE`,
+      // Hide person-only products; NULL (unscanned) stays visible.
+      Prisma.sql`"hasPerson" IS NOT TRUE`,
     ];
     if (req.query.category) clauses.push(Prisma.sql`category = ${String(req.query.category)}`);
     if (req.query.subcategory)
@@ -183,6 +185,9 @@ router.get("/", async (req: Request, res: Response) => {
   // so it composes with the search OR (a second top-level OR would clobber it).
   const and: Prisma.ClothingItemWhereInput[] = [
     { OR: [{ isClothing: true }, { isClothing: null }] },
+    // Hide person-only products; NULL (unscanned) stays visible. Prisma's
+    // field-level `not` excludes NULLs, so spell out the OR explicitly.
+    { OR: [{ hasPerson: false }, { hasPerson: null }] },
   ];
 
   if (req.query.category) where.category = String(req.query.category);
@@ -284,6 +289,7 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     Prisma.sql`active = true`,
     Prisma.sql`"hasNobg" = true`,
     Prisma.sql`"isClothing" IS NOT FALSE`,
+    Prisma.sql`"hasPerson" IS NOT TRUE`,
   ];
   if (excludeIds.length > 0) {
     sqlWhere.push(Prisma.sql`id NOT IN (${Prisma.join(excludeIds)})`);
@@ -407,7 +413,10 @@ router.get("/:id/similar", async (req: Request, res: Response) => {
           active: true,
           id: { not: id },
           brand: src.brand,
-          AND: [{ OR: [{ isClothing: true }, { isClothing: null }] }],
+          AND: [
+            { OR: [{ isClothing: true }, { isClothing: null }] },
+            { OR: [{ hasPerson: false }, { hasPerson: null }] },
+          ],
         },
         orderBy: { createdAt: "desc" },
         take: limit,
@@ -422,8 +431,9 @@ router.get("/:id/similar", async (req: Request, res: Response) => {
 
 router.get("/:id", async (req: Request, res: Response) => {
   const id = req.params.id as string;
-  const item = await prisma.clothingItem.findUnique({
-    where: { id, active: true },
+  const item = await prisma.clothingItem.findFirst({
+    // Hide person-only products; NULL (unscanned) stays visible.
+    where: { id, active: true, OR: [{ hasPerson: false }, { hasPerson: null }] },
   });
 
   if (!item) {

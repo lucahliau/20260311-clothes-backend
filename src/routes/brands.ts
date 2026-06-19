@@ -31,7 +31,7 @@ async function getExploreBrandGroups(): Promise<{ brand: string; productCount: n
   const rows = await prisma.$queryRaw<{ brand: string; productCount: bigint }[]>`
     SELECT brand, COUNT(*)::bigint AS "productCount"
     FROM "ClothingItem"
-    WHERE active = true
+    WHERE active = true AND "hasPerson" IS NOT TRUE
     GROUP BY brand
   `;
   const mapped = rows.map((r) => ({ brand: r.brand, productCount: Number(r.productCount) }));

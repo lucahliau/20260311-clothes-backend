@@ -235,6 +235,13 @@ model ClothingItem {
   isClothing                Boolean?
   classifiedAt              DateTime?
   classificationConfidence  Float?
+  // People-photo detection (written by bgremover/person_scan_worker.py, local
+  // YOLO on the ORIGINAL images). hasPerson=true soft-hides products whose only
+  // photos are of a model/person; NULL = not yet scanned → treated as visible
+  // (queries use `hasPerson IS NOT TRUE`). personScannedAt marks a completed scan.
+  hasPerson                 Boolean?
+  personScannedAt           DateTime?
+  personScanConfidence      Float?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -251,6 +258,7 @@ model ClothingItem {
   @@index([active])
   @@index([hasNobg])
   @@index([isClothing])
+  @@index([hasPerson])
   @@index([retailer])
 }
 

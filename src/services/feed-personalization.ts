@@ -225,6 +225,9 @@ export function buildItemFilterSql(excludeIds: string[], filters: FeedFilters): 
     Prisma.sql`ci."hasNobg" = true`,
     // Hide classified non-wearables; NULL (unclassified) stays visible.
     Prisma.sql`ci."isClothing" IS NOT FALSE`,
+    // Hide products whose only photos are of a model/person; NULL (unscanned)
+    // stays visible.
+    Prisma.sql`ci."hasPerson" IS NOT TRUE`,
   ];
   if (excludeIds.length > 0) {
     clauses.push(Prisma.sql`ci.id NOT IN (${Prisma.join(excludeIds)})`);
