@@ -26,6 +26,8 @@ function toFeedItem(item: ClothingItem) {
     category: item.category,
     price: item.price,
     currency: item.currency,
+    salePrice: item.salePrice,
+    compareAtPrice: item.compareAtPrice,
     imageUrl: item.imageUrl,
     images: item.images,
     colors: item.colors,
