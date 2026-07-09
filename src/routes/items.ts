@@ -137,6 +137,10 @@ router.get("/", async (req: Request, res: Response) => {
     if (sProductType) clauses.push(Prisma.sql`"productType" = ${sProductType}`);
     if (req.query.minPrice) clauses.push(Prisma.sql`price >= ${Number(req.query.minPrice)}`);
     if (req.query.maxPrice) clauses.push(Prisma.sql`price <= ${Number(req.query.maxPrice)}`);
+    // On-sale only. The crawler invariant guarantees compareAtPrice is non-null
+    // exactly when the item is genuinely discounted (compareAtPrice > price).
+    if (String(req.query.onSale).toLowerCase() === "true")
+      clauses.push(Prisma.sql`"compareAtPrice" IS NOT NULL`);
     clauses.push(
       Prisma.sql`(name ILIKE ${like} OR description ILIKE ${like} OR brand ILIKE ${like})`,
     );
@@ -205,6 +209,11 @@ router.get("/", async (req: Request, res: Response) => {
     if (req.query.minPrice) price.gte = Number(req.query.minPrice);
     if (req.query.maxPrice) price.lte = Number(req.query.maxPrice);
     where.price = price;
+  }
+
+  // On-sale only (same invariant as the search path above).
+  if (String(req.query.onSale).toLowerCase() === "true") {
+    where.compareAtPrice = { not: null };
   }
 
   // Text search is handled by the relevance-ranked raw path above (returns early).
