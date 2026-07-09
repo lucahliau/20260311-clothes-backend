@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { cdnImageUrl, withCdnImages } from "../lib/imageCdn.js";
+import { toFeedItem } from "../lib/wire.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import {
@@ -11,34 +12,6 @@ import {
   type FeedFilters,
   type FeedMatch,
 } from "../services/feed-personalization.js";
-
-/** Wire shape for feed items: only the fields the iOS `Item` model actually
- * reads (all its keys decode via decodeIfPresent, so dropping unused columns —
- * metadata, externalId, manufacturerCode, lastVerifiedAt, subcategory, sizes,
- * tags, active, updatedAt, hasNobg — is additive-safe for shipped builds and
- * cuts payload + client decode time). */
-function toFeedItem(item: ClothingItem) {
-  const slim = {
-    id: item.id,
-    name: item.name,
-    description: item.description,
-    brand: item.brand,
-    category: item.category,
-    price: item.price,
-    currency: item.currency,
-    salePrice: item.salePrice,
-    compareAtPrice: item.compareAtPrice,
-    imageUrl: item.imageUrl,
-    images: item.images,
-    colors: item.colors,
-    gender: item.gender,
-    productType: item.productType,
-    sourceUrl: item.sourceUrl,
-    retailer: item.retailer,
-    createdAt: item.createdAt,
-  };
-  return withCdnImages(slim);
-}
 
 /** Rewrite contributor thumbnails ("because you liked…" UI) onto the CDN too. */
 function toWireMatch(match: FeedMatch): FeedMatch {

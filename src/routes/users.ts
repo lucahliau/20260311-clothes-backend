@@ -14,6 +14,7 @@ import { sendAccountDeletedEmail } from "../lib/email.js";
 import { AppError } from "../middleware/error.js";
 import { searchLimiter } from "../middleware/rateLimit.js";
 import { isBlockedPair } from "../lib/social.js";
+import { warmUserClusters } from "../services/feed-personalization.js";
 
 const router = Router();
 
@@ -140,6 +141,11 @@ async function buildRelationship(viewerId: string | undefined, targetId: string)
 // ---------------------------------------------------------------------------
 
 router.get("/me", requireAuth, async (req: Request, res: Response) => {
+  // The app hits /users/me at every launch — piggyback a non-blocking
+  // personalized-feed cluster warm-up so a post-restart cold build happens
+  // during the splash, not on the first /items/feed.
+  warmUserClusters(req.user!.userId);
+
   const user = await prisma.user.findUnique({
     where: { id: req.user!.userId },
     omit: PRIVATE_FIELDS,

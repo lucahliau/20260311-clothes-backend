@@ -13,7 +13,14 @@ import { env } from "./env.js";
  * extension; the options segment contains no dots, so that derivation still
  * works on rewritten URLs.
  */
-const CDN_OPTIONS = "width=1300,quality=82,format=auto";
+/** Full-screen card width — matches the iOS client's 1300px decode target. */
+const DEFAULT_CDN_WIDTH = 1300;
+
+function cdnOptions(width: number): string {
+  // Keep this segment dot-free: the iOS app derives `-nobg.png` variants by
+  // swapping the URL's *last* path extension.
+  return `width=${width},quality=82,format=auto`;
+}
 
 function isRewritableHost(hostname: string): boolean {
   if (hostname.endsWith(".r2.dev")) return true;
@@ -28,27 +35,32 @@ function isRewritableHost(hostname: string): boolean {
   return false;
 }
 
-export function cdnImageUrl(url: string | null | undefined): string | null | undefined {
+export function cdnImageUrl(
+  url: string | null | undefined,
+  width: number = DEFAULT_CDN_WIDTH,
+): string | null | undefined {
   const host = env().IMG_CDN_HOST;
   if (!host || !url) return url;
   try {
     const parsed = new URL(url);
     if (!isRewritableHost(parsed.hostname)) return url;
     const path = parsed.pathname.replace(/^\//, "");
-    return `https://${host}/cdn-cgi/image/${CDN_OPTIONS}/${path}`;
+    return `https://${host}/cdn-cgi/image/${cdnOptions(width)}/${path}`;
   } catch {
     return url;
   }
 }
 
-/** Returns a copy of an item-shaped object with imageUrl/images rewritten. No-op when IMG_CDN_HOST is unset. */
+/** Returns a copy of an item-shaped object with imageUrl/images rewritten to
+ * `width` (thumbnail contexts pass a small width). No-op when IMG_CDN_HOST is unset. */
 export function withCdnImages<T extends { imageUrl?: string | null; images?: string[] }>(
   item: T,
+  width: number = DEFAULT_CDN_WIDTH,
 ): T {
   if (!env().IMG_CDN_HOST) return item;
   return {
     ...item,
-    imageUrl: cdnImageUrl(item.imageUrl) ?? item.imageUrl,
-    images: item.images?.map((u) => cdnImageUrl(u) ?? u),
+    imageUrl: cdnImageUrl(item.imageUrl, width) ?? item.imageUrl,
+    images: item.images?.map((u) => cdnImageUrl(u, width) ?? u),
   };
 }

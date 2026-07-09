@@ -169,6 +169,15 @@ function readUserClusters(userId: string): UserClusters | undefined {
   return entry;
 }
 
+/** Fire-and-forget cluster warm-up for launch-adjacent endpoints (/users/me):
+ * after a process restart or LRU eviction, the ~3s k-means + ANN cold build
+ * runs during the app's splash instead of blocking the first /items/feed.
+ * No-op when a cached entry exists; startClusterBuild dedupes concurrent
+ * callers and swallows failures (the feed's own fallback still applies). */
+export function warmUserClusters(userId: string): void {
+  if (!readUserClusters(userId)) void startClusterBuild(userId);
+}
+
 export function invalidateUserClusters(userId: string): void {
   // Stale-while-revalidate: do NOT delete the cached clusters. Dropping them
   // forces the next /items/feed to recompute k-means + per-cluster ANN
