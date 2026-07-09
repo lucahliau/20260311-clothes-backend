@@ -220,6 +220,9 @@ model ClothingItem {
   // struck was-price (compareAtPrice > price). Not on sale: both NULL.
   salePrice       Decimal? @db.Decimal(10, 2)
   compareAtPrice  Decimal? @db.Decimal(10, 2)
+  // Stock from the retailer's live listing: NULL unknown, FALSE = sold out or
+  // delisted. Never used to hide items — the app shows a "SOLD OUT" tag.
+  inStock         Boolean?
   imageUrl    String
   images      String[]
   colors      String[]

@@ -28,6 +28,7 @@ export function toFeedItem(item: ClothingItem, cdnWidth?: number) {
     retailer: item.retailer,
     createdAt: item.createdAt,
     hasNobg: item.hasNobg,
+    inStock: item.inStock,
   };
   return cdnWidth === undefined ? withCdnImages(slim) : withCdnImages(slim, cdnWidth);
 }
