@@ -47,6 +47,12 @@ const envSchema = z.object({
   SENTRY_ENVIRONMENT: z.string().optional(),
   SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
+
+  /** Self-hosted logdeck hub (central log collation across projects, ~/Desktop/logdeck).
+   * Both optional — the pino mirror in logger.ts is a no-op when either is unset.
+   * LOGDECK_KEY is this project's write-only ingest key (ldk_…), not the hub admin key. */
+  LOGDECK_URL: z.string().url().optional(),
+  LOGDECK_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

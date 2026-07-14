@@ -12,6 +12,7 @@
  */
 
 import pino from "pino";
+import { logdeckPinoStream } from "./logdeckStream.js";
 
 const NODE_ENV = process.env.NODE_ENV ?? "development";
 const LOG_LEVEL = process.env.LOG_LEVEL ?? (NODE_ENV === "production" ? "info" : "debug");
@@ -46,23 +47,47 @@ export const REDACT_PATHS: string[] = [
   "*.resetTokenHash",
 ];
 
-export const logger = pino({
-  level: LOG_LEVEL,
-  redact: {
-    paths: REDACT_PATHS,
-    censor: "[Redacted]",
-    remove: false,
+// logdeck mirror (self-hosted log hub) — active only when both env vars are set
+// (they are Railway-only; local dev and vitest keep single-stream behavior).
+// Note: `transport` and a destination stream are mutually exclusive in pino, so the
+// mirror is wired through `pino.multistream` and only on the non-transport (prod) path.
+const logdeckEnabled = !useTransport && !!process.env.LOGDECK_URL && !!process.env.LOGDECK_KEY;
+
+export const logger = pino(
+  {
+    level: LOG_LEVEL,
+    redact: {
+      paths: REDACT_PATHS,
+      censor: "[Redacted]",
+      remove: false,
+    },
+    // Pretty in dev, JSON in prod/test. `pino-pretty` is a devDependency and
+    // intentionally not loaded in production builds or under vitest.
+    transport: useTransport
+      ? {
+          target: "pino-pretty",
+          options: {
+            colorize: true,
+            translateTime: "SYS:HH:MM:ss.l",
+            ignore: "pid,hostname",
+          },
+        }
+      : undefined,
   },
-  // Pretty in dev, JSON in prod/test. `pino-pretty` is a devDependency and
-  // intentionally not loaded in production builds or under vitest.
-  transport: useTransport
-    ? {
-        target: "pino-pretty",
-        options: {
-          colorize: true,
-          translateTime: "SYS:HH:MM:ss.l",
-          ignore: "pid,hostname",
+  logdeckEnabled
+    ? pino.multistream([
+        // stdout stays the source of truth for Railway's own log view…
+        { level: "trace", stream: pino.destination(1) },
+        // …and every line is mirrored to logdeck (pino redaction already applied).
+        {
+          level: "trace",
+          stream: logdeckPinoStream({
+            url: process.env.LOGDECK_URL as string,
+            key: process.env.LOGDECK_KEY as string,
+            service: "api",
+            env: NODE_ENV,
+          }),
         },
-      }
+      ])
     : undefined,
-});
+);
