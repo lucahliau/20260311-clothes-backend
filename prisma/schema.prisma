@@ -269,6 +269,10 @@ model ClothingItem {
   @@index([isClothing])
   @@index([hasPerson])
   @@index([retailer])
+  // Equality lookups by image URL — the crawler's setHasNobgForKeys flips
+  // hasNobg by exact imageUrl match after each nobg batch (2026-07-14 incident:
+  // without this + with a suffix LIKE, each batch full-scanned the table).
+  @@index([imageUrl])
 }
 
 enum SwipeAction {
