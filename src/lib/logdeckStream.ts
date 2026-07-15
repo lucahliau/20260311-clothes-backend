@@ -26,8 +26,13 @@ interface LogdeckEntry {
   stack?: string;
   service?: string;
   env?: string;
+  release?: string;
   context?: Record<string, unknown>;
 }
+
+// Railway injects the deploy's commit SHA — lets the hub attribute errors to releases.
+const RELEASE =
+  (process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT ?? "").slice(0, 64) || undefined;
 
 const FLUSH_INTERVAL_MS = 2_000;
 const MAX_BATCH = 100;
@@ -89,6 +94,7 @@ export function logdeckPinoStream(opts: LogdeckStreamOptions): { write: (line: s
           stack: err?.stack,
           service: opts.service,
           env: opts.env,
+          release: RELEASE,
         };
         const context: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(o)) {
