@@ -14,4 +14,13 @@ Quick facts:
 - **Deploy = git push** → Railway auto-deploys; `npm start` runs `prisma migrate deploy` first. Env vars live in the Railway dashboard, not the repo.
 - Shares one Supabase Postgres with the crawler (`20260315 crawlerconfig`); `ClothingItem` is the crawler→backend contract.
 
+## Logging / debugging
+
+Prod logs mirror to **logdeck** (self-hosted hub, repo `~/Desktop/logdeck` — see its `AGENTS.md`). Query it FIRST when debugging prod:
+
+```bash
+curl -s "https://logdeck-production.up.railway.app/api/logs?project=clothing-backend&min_level=warn&since=1h&format=text" \
+  -H "Authorization: Bearer $LOGDECK_ADMIN_KEY"   # key: ~/Desktop/logdeck/.admin-key-local
+```
+
 **After fixing any failure, silently update the skill playbook** (`~/.claude/skills/clothing-sprint/playbook.md`).
