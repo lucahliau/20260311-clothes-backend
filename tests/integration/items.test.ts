@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import request from "supertest";
 import { app, auth, createVerifiedUser, resetDb, seedItems, type TestUser } from "./helpers.js";
+import { prisma } from "../../src/lib/prisma.js";
 
 describe("items catalog", () => {
   let user: TestUser;
@@ -60,5 +61,26 @@ describe("items catalog", () => {
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.items)).toBe(true);
     expect(res.body.items.length).toBeLessThanOrEqual(10);
+  });
+
+  it("continues a feed without repeating client-seen items", async () => {
+    const eligible = await seedItems(4, { brand: "ContinuationBrand" });
+    await Promise.all(
+      eligible.map((item) =>
+        prisma.clothingItem.update({ where: { id: item.id }, data: { hasNobg: true } }),
+      ),
+    );
+
+    const excludedIds = eligible.slice(0, 2).map((item) => item.id);
+    const res = await request(app())
+      .post("/items/feed?limit=10")
+      .set(auth(user.accessToken))
+      .send({ excludeIds: excludedIds });
+
+    expect(res.status).toBe(200);
+    expect(res.body.hasMore).toBe(true);
+    expect(res.body.items.map((item: { id: string }) => item.id)).not.toEqual(
+      expect.arrayContaining(excludedIds),
+    );
   });
 });

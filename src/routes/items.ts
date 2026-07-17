@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import { z } from "zod";
 import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { cdnImageUrl, withCdnImages } from "../lib/imageCdn.js";
@@ -33,6 +34,7 @@ const DEFAULT_PAGE_SIZE = 100;
 const FEED_DEFAULT_LIMIT = 50;
 const FEED_MAX_LIMIT = 200;
 const MAX_EXCLUDE_IDS = 1000; // cap notIn size to avoid query timeouts
+const MAX_CLIENT_EXCLUDE_IDS = 250;
 // UUID v4 format: 8-4-4-4-12
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PAGE_SIZE = 10_000;
@@ -64,6 +66,10 @@ function profileGenderToFilter(profileGender: string | null | undefined): string
   if (g === "female" || g === "woman" || g === "women") return ["female", "unisex"];
   return null; // non-binary / unset / "everything" → no gender filter
 }
+
+const feedContinuationSchema = z.object({
+  excludeIds: z.array(z.string().uuid()).max(MAX_CLIENT_EXCLUDE_IDS).default([]),
+});
 
 // ---------------------------------------------------------------------------
 // GET /items
@@ -218,12 +224,14 @@ router.get("/", async (req: Request, res: Response) => {
 // GET /items/feed
 // ---------------------------------------------------------------------------
 
-router.get("/feed", requireAuth, async (req: Request, res: Response) => {
+async function serveFeed(req: Request, res: Response) {
   const limit = Math.min(
     FEED_MAX_LIMIT,
     Math.max(1, Number(req.query.limit) || FEED_DEFAULT_LIMIT),
   );
   const userId = req.user!.userId;
+  const clientExcludeIds =
+    req.method === "POST" ? feedContinuationSchema.parse(req.body).excludeIds : [];
 
   const filters: FeedFilters = {};
   if (typeof req.query.category === "string" && req.query.category.trim()) {
@@ -249,11 +257,16 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   // if anything in the embedding pipeline fails (missing pgvector index, DB
   // error, etc.) so /items/feed never goes empty for an avoidable reason.
   try {
-    const entries = await buildPersonalizedFeed({ userId, limit, filters });
+    const entries = await buildPersonalizedFeed({
+      userId,
+      limit,
+      filters,
+      excludeIds: clientExcludeIds,
+    });
     if (entries.length > 0) {
       const items = entries.map((e) => toFeedItem(e.item));
       const matches: FeedMatch[] = entries.map((e) => toWireMatch(e.match));
-      res.json({ items, matches, remaining: items.length });
+      res.json({ items, matches, remaining: items.length, hasMore: true });
       return;
     }
   } catch (err) {
@@ -267,7 +280,12 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     orderBy: { createdAt: "desc" },
     take: MAX_EXCLUDE_IDS,
   });
-  const excludeIds = swipedItemIds.map((s) => s.itemId).filter((id) => UUID_REGEX.test(id));
+  const excludeIds = [
+    ...new Set([
+      ...clientExcludeIds,
+      ...swipedItemIds.map((s) => s.itemId).filter((id) => UUID_REGEX.test(id)),
+    ]),
+  ];
 
   const sqlWhere: Prisma.Sql[] = [
     Prisma.sql`active = true`,
@@ -297,7 +315,7 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
 
   const idOrder = idRows.map((r) => r.id);
   if (idOrder.length === 0) {
-    res.json({ items: [], matches: [], remaining: 0 });
+    res.json({ items: [], matches: [], remaining: 0, hasMore: false });
     return;
   }
 
@@ -322,8 +340,14 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     topContributors: [],
   }));
 
-  res.json({ items, matches, remaining: items.length });
-});
+  res.json({ items, matches, remaining: items.length, hasMore: true });
+}
+
+// GET remains the frozen shipped-client contract. POST is the continuation
+// form used by newer clients so session-local seen IDs are excluded even while
+// swipe writes are still queued/batched on-device.
+router.get("/feed", requireAuth, serveFeed);
+router.post("/feed", requireAuth, serveFeed);
 
 // ---------------------------------------------------------------------------
 // GET /items/:id/similar  — "More like this" via CLIP image-embedding ANN

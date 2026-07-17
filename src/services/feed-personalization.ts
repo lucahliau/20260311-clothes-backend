@@ -765,6 +765,10 @@ export type BuildFeedArgs = {
   userId: string;
   limit: number;
   filters: FeedFilters;
+  /** Items already held/seen by this client session but not necessarily
+   * persisted as Swipe rows yet. This closes the batch-flush race during
+   * infinite scrolling. */
+  excludeIds?: string[];
 };
 
 export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<FeedEntry[]> {
@@ -777,7 +781,12 @@ export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<FeedEn
     orderBy: { createdAt: "desc" },
     take: 1000,
   });
-  const excludeIds = swiped.map((s) => s.itemId).filter((id) => UUID_REGEX.test(id));
+  const excludeIds = [
+    ...new Set([
+      ...(args.excludeIds ?? []).filter((id) => UUID_REGEX.test(id)),
+      ...swiped.map((s) => s.itemId).filter((id) => UUID_REGEX.test(id)),
+    ]),
+  ];
 
   const [user, clusterState] = await Promise.all([
     prisma.user.findUnique({
