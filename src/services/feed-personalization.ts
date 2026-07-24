@@ -38,10 +38,10 @@ const W_STYLE = 0.05;
 const STYLE_MATCH_CAP = 3; // cap |tags ∩ stylePreferences| contribution
 const JITTER_RANGE = 0.05;
 
-// Exploration mix
+// Exploration mix. Default fraction of the deck that is personalized when the
+// client doesn't send a `personalization` value (the "Discovery ↔ For You"
+// slider); the remainder is split evenly between novelty and random.
 const PERSONALIZED_FRACTION = 0.7;
-const NOVELTY_FRACTION = 0.15;
-// remainder is pure random
 
 // Caching
 const CLUSTER_TTL_MS = 5 * 60 * 1000;
@@ -769,10 +769,44 @@ export type BuildFeedArgs = {
    * persisted as Swipe rows yet. This closes the batch-flush race during
    * infinite scrolling. */
   excludeIds?: string[];
+  /** How personalized the feed should be, 0..1 (the "Discovery ↔ For You"
+   * slider). 1 = all recommendations, 0 = pure discovery (novelty + random),
+   * default = PERSONALIZED_FRACTION. The remainder (1 - p) is split ~evenly
+   * between novelty and random exploration. */
+  personalization?: number;
 };
+
+/**
+ * Discovery-only feed (personalization slider at 0): novelty + random, no
+ * cluster scoring. Novelty still uses the existing clusters to bias toward
+ * items *unlike* the user's current taste; random is pure catalog sampling.
+ */
+async function buildExplorationOnlyFeed(
+  clusters: { centroid: Vector }[],
+  excludeIds: string[],
+  filters: FeedFilters,
+  nNovelty: number,
+  nRandom: number,
+): Promise<FeedEntry[]> {
+  const [noveltyPicks, randomItems] = await Promise.all([
+    fetchNoveltyItems(nNovelty, excludeIds, filters, clusters),
+    fetchRandomItems(nRandom, excludeIds, filters),
+  ]);
+  const noveltyEntries: FeedEntry[] = noveltyPicks.map((pick) => ({
+    item: pick.item,
+    match: noveltyMatch(pick.item.id, pick.clusterIndex, pick.maxSim),
+  }));
+  // Random picks may overlap novelty picks (independent queries); dedupe.
+  const seen = new Set(noveltyEntries.map((e) => e.item.id));
+  const randomEntries: FeedEntry[] = randomItems
+    .filter((item) => !seen.has(item.id))
+    .map((item) => ({ item, match: randomMatch(item.id) }));
+  return interleaveExploration(noveltyEntries, randomEntries, Math.random);
+}
 
 export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<FeedEntry[]> {
   const { userId, limit, filters } = args;
+  const p = Math.max(0, Math.min(1, args.personalization ?? PERSONALIZED_FRACTION));
 
   // Excluded items: previously-swiped (cap 1000 most recent).
   const swiped = await prisma.swipe.findMany({
@@ -801,10 +835,19 @@ export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<FeedEn
     return coldStartFeed(user, excludeIds, filters, limit);
   }
 
-  // Slot budget for the three pools.
-  const nPersonalized = Math.max(1, Math.floor(limit * PERSONALIZED_FRACTION));
-  const nNovelty = Math.max(0, Math.floor(limit * NOVELTY_FRACTION));
-  const nRandom = Math.max(0, limit - nPersonalized - nNovelty);
+  // Slot budget for the three pools, driven by the personalization slider `p`.
+  // p=1 → all personalized; p=0 → pure discovery (novelty + random). The
+  // exploration remainder is split ~evenly between novelty and random.
+  const nPersonalized = Math.round(limit * p);
+  const nExploration = Math.max(0, limit - nPersonalized);
+  const nNovelty = Math.floor(nExploration / 2);
+  const nRandom = nExploration - nNovelty;
+
+  // Pure-discovery shortcut (slider hard-left): skip cluster retrieval/scoring
+  // entirely and fill the whole deck from exploration.
+  if (nPersonalized === 0) {
+    return buildExplorationOnlyFeed(clusterState.clusters, excludeIds, filters, nNovelty, nRandom);
+  }
 
   // 1. Candidate retrieval per cluster.
   const candidates = await retrieveCandidatesPerCluster(clusterState.clusters, excludeIds, filters);

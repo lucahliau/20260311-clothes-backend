@@ -253,6 +253,16 @@ async function serveFeed(req: Request, res: Response) {
   const productType = parseProductType(req.query.productType);
   if (productType) filters.productType = productType;
 
+  // "Discovery ↔ For You" slider (0..1). Absent/invalid → undefined, so the
+  // feed builder uses its default mix. NaN-safe: Number("") is 0, so require a
+  // non-empty string first.
+  const personalizationRaw = req.query.personalization;
+  let personalization: number | undefined;
+  if (typeof personalizationRaw === "string" && personalizationRaw.trim() !== "") {
+    const parsed = Number(personalizationRaw);
+    if (Number.isFinite(parsed)) personalization = Math.max(0, Math.min(1, parsed));
+  }
+
   // Try the personalized path; fall back to a preference-agnostic random feed
   // if anything in the embedding pipeline fails (missing pgvector index, DB
   // error, etc.) so /items/feed never goes empty for an avoidable reason.
@@ -262,6 +272,7 @@ async function serveFeed(req: Request, res: Response) {
       limit,
       filters,
       excludeIds: clientExcludeIds,
+      personalization,
     });
     if (entries.length > 0) {
       const items = entries.map((e) => toFeedItem(e.item));
