@@ -9,7 +9,7 @@ import { env, getAppleUniversalLinkAppId } from "./lib/env.js";
 import { buildAppleAppSiteAssociation } from "./lib/appleAppSiteAssociation.js";
 import { logger, REDACT_PATHS } from "./lib/logger.js";
 import { attachSentryErrorHandler } from "./lib/sentry.js";
-import { prisma } from "./lib/prisma.js";
+import { checkDbReadiness, prisma } from "./lib/prisma.js";
 import { globalLimiter } from "./middleware/rateLimit.js";
 import { errorHandler } from "./middleware/error.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
@@ -349,16 +349,16 @@ export function createApp(): express.Express {
     }
   });
 
-  // Readiness probe — distinct from /health for clarity. Same DB check today;
-  // can grow to include downstream services without changing /health's contract.
+  // Readiness probe — representative catalog access plus local pool pressure,
+  // distinct from the intentionally cheap liveness check above.
   app.get("/ready", async (req, res) => {
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      res.json({ status: "ready", checks: { db: "ok" } });
-    } catch (err) {
-      req.log.error({ err }, "Readiness probe failed: DB unreachable");
-      res.status(503).json({ status: "not_ready", checks: { db: "error" } });
+    const db = await checkDbReadiness();
+    if (db.ok) {
+      res.json({ status: "ready", checks: { db: "ok", catalog: "ok" }, db });
+      return;
     }
+    req.log.warn({ db }, "Readiness probe failed: catalog unavailable");
+    res.status(503).json({ status: "not_ready", checks: { db: "degraded", catalog: "error" }, db });
   });
 
   // Public legal pages (/privacy, /terms) — linked from the App Store listing

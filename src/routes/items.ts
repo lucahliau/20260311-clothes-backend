@@ -1,10 +1,12 @@
 import { Router, Request, Response } from "express";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { cdnImageUrl, withCdnImages } from "../lib/imageCdn.js";
 import { toFeedItem } from "../lib/wire.js";
 import { requireAuth } from "../middleware/auth.js";
+import { expensiveReadAdmission } from "../middleware/admission.js";
 import { AppError } from "../middleware/error.js";
 import {
   buildPersonalizedFeed,
@@ -37,7 +39,7 @@ const MAX_EXCLUDE_IDS = 1000; // cap notIn size to avoid query timeouts
 const MAX_CLIENT_EXCLUDE_IDS = 250;
 // UUID v4 format: 8-4-4-4-12
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_PAGE_SIZE = 10_000;
+const MAX_PAGE_SIZE = 200;
 
 const VALID_GENDERS = new Set(["male", "female", "unisex", "men", "women"]);
 const VALID_PRODUCT_TYPES = new Set(["tops", "bottoms", "bags", "accessories", "jackets", "other"]);
@@ -75,7 +77,7 @@ const feedContinuationSchema = z.object({
 // GET /items
 // ---------------------------------------------------------------------------
 
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", expensiveReadAdmission, async (req: Request, res: Response) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
   const skip = (page - 1) * limit;
@@ -133,17 +135,15 @@ router.get("/", async (req: Request, res: Response) => {
         ELSE 0
       END`;
 
-    const [idRows, countRows] = await Promise.all([
-      prisma.$queryRaw<{ id: string }[]>`
+    const idRows = await prisma.$queryRaw<{ id: string }[]>`
         SELECT id FROM "ClothingItem"
         WHERE ${whereSql}
         ORDER BY ${relevance} DESC, "createdAt" DESC
         LIMIT ${limit} OFFSET ${skip}
-      `,
-      prisma.$queryRaw<{ count: bigint }[]>`
+      `;
+    const countRows = await prisma.$queryRaw<{ count: bigint }[]>`
         SELECT COUNT(*)::bigint AS count FROM "ClothingItem" WHERE ${whereSql}
-      `,
-    ]);
+      `;
 
     const idOrder = idRows.map((r) => r.id);
     const found = idOrder.length
@@ -199,15 +199,13 @@ router.get("/", async (req: Request, res: Response) => {
 
   where.AND = and;
 
-  const [items, total] = await Promise.all([
-    prisma.clothingItem.findMany({
-      where,
-      skip,
-      take: limit,
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.clothingItem.count({ where }),
-  ]);
+  const items = await prisma.clothingItem.findMany({
+    where,
+    skip,
+    take: limit,
+    orderBy: { createdAt: "desc" },
+  });
+  const total = await prisma.clothingItem.count({ where });
 
   res.json({
     items: items.map(withCdnImages),
@@ -317,12 +315,23 @@ async function serveFeed(req: Request, res: Response) {
   }
   if (filters.productType) sqlWhere.push(Prisma.sql`"productType" = ${filters.productType}`);
 
-  const idRows = await prisma.$queryRaw<{ id: string }[]>`
+  const pivot = randomUUID();
+  const after = await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "ClothingItem"
-    WHERE ${Prisma.join(sqlWhere, " AND ")}
-    ORDER BY RANDOM()
+    WHERE ${Prisma.join(sqlWhere, " AND ")} AND id >= ${pivot}
+    ORDER BY id
     LIMIT ${limit}
   `;
+  const before =
+    after.length < limit
+      ? await prisma.$queryRaw<{ id: string }[]>`
+          SELECT id FROM "ClothingItem"
+          WHERE ${Prisma.join(sqlWhere, " AND ")} AND id < ${pivot}
+          ORDER BY id
+          LIMIT ${limit - after.length}
+        `
+      : [];
+  const idRows = [...after, ...before];
 
   const idOrder = idRows.map((r) => r.id);
   if (idOrder.length === 0) {
@@ -357,14 +366,14 @@ async function serveFeed(req: Request, res: Response) {
 // GET remains the frozen shipped-client contract. POST is the continuation
 // form used by newer clients so session-local seen IDs are excluded even while
 // swipe writes are still queued/batched on-device.
-router.get("/feed", requireAuth, serveFeed);
-router.post("/feed", requireAuth, serveFeed);
+router.get("/feed", requireAuth, expensiveReadAdmission, serveFeed);
+router.post("/feed", requireAuth, expensiveReadAdmission, serveFeed);
 
 // ---------------------------------------------------------------------------
 // GET /items/:id/similar  — "More like this" via CLIP image-embedding ANN
 // ---------------------------------------------------------------------------
 
-router.get("/:id/similar", async (req: Request, res: Response) => {
+router.get("/:id/similar", expensiveReadAdmission, async (req: Request, res: Response) => {
   const id = req.params.id as string;
   if (!UUID_REGEX.test(id)) {
     throw new AppError(400, "INVALID_ID", "Invalid item id");

@@ -16,6 +16,7 @@
  */
 
 import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
+import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma.js";
 import { sphericalKMeans, normalize, dot, pickK, type Vector } from "../lib/kmeans.js";
 
@@ -414,10 +415,13 @@ async function retrieveCandidatesPerCluster(
   const filterClauses = buildItemFilterSql(excludeIds, filters);
   const filterSql = Prisma.join(filterClauses, " AND ");
 
-  const perCluster = await Promise.all(
-    clusters.map(async (cluster, idx) => {
-      const lit = vectorToLiteral(cluster.centroid);
-      const rows = await prisma.$queryRaw<{ itemId: string; dist: number }[]>`
+  // Deliberately sequential: one feed request should consume one DB connection
+  // at a time instead of occupying most of the API pool.
+  const perCluster: Candidate[][] = [];
+  for (let idx = 0; idx < clusters.length; idx++) {
+    const cluster = clusters[idx]!;
+    const lit = vectorToLiteral(cluster.centroid);
+    const rows = await prisma.$queryRaw<{ itemId: string; dist: number }[]>`
         SELECT ie."itemId" AS "itemId",
                (ie.vector <=> ${lit}::vector(512))::float8 AS dist
         FROM "ItemEmbedding" ie
@@ -426,13 +430,14 @@ async function retrieveCandidatesPerCluster(
         ORDER BY ie.vector <=> ${lit}::vector(512)
         LIMIT ${CANDIDATES_PER_CLUSTER}
       `;
-      return rows.map((r) => ({
+    perCluster.push(
+      rows.map((r) => ({
         itemId: r.itemId,
         clusterIndex: idx,
         clusterSim: 1 - Number(r.dist),
-      }));
-    }),
-  );
+      })),
+    );
+  }
 
   // Union, keep the best (highest sim) cluster assignment per item.
   const byItem = new Map<string, Candidate>();
@@ -548,13 +553,25 @@ async function fetchRandomItems(
   if (count <= 0) return [];
   const filterClauses = buildItemFilterSql(excludeIds, filters);
   const filterSql = Prisma.join(filterClauses, " AND ");
-  const idRows = await prisma.$queryRaw<{ id: string }[]>`
+  const pivot = randomUUID();
+  const after = await prisma.$queryRaw<{ id: string }[]>`
     SELECT ci.id
     FROM "ClothingItem" ci
-    WHERE ${filterSql}
-    ORDER BY RANDOM()
+    WHERE ${filterSql} AND ci.id >= ${pivot}
+    ORDER BY ci.id
     LIMIT ${count}
   `;
+  const before =
+    after.length < count
+      ? await prisma.$queryRaw<{ id: string }[]>`
+          SELECT ci.id
+          FROM "ClothingItem" ci
+          WHERE ${filterSql} AND ci.id < ${pivot}
+          ORDER BY ci.id
+          LIMIT ${count - after.length}
+        `
+      : [];
+  const idRows = [...after, ...before];
   if (idRows.length === 0) return [];
   const ids = idRows.map((r) => r.id);
   const rows = await prisma.clothingItem.findMany({ where: { id: { in: ids } } });
@@ -578,14 +595,29 @@ async function fetchNoveltyItems(
   const filterClauses = buildItemFilterSql(excludeIds, filters);
   const filterSql = Prisma.join(filterClauses, " AND ");
   const poolSize = count * 6;
-  const rows = await prisma.$queryRaw<{ itemId: string; vector: string }[]>`
+  const pivot = randomUUID();
+  const after = await prisma.$queryRaw<{ itemId: string; vector: string }[]>`
     SELECT ie."itemId" AS "itemId", ie.vector::text AS vector
     FROM "ItemEmbedding" ie
     JOIN "ClothingItem" ci ON ci.id = ie."itemId"
-    WHERE ie.model = ${EMBEDDING_MODEL} AND ${filterSql}
-    ORDER BY RANDOM()
+    WHERE ie.model = ${EMBEDDING_MODEL} AND ${filterSql} AND ie."itemId" >= ${pivot}
+    ORDER BY ie."itemId"
     LIMIT ${poolSize}
   `;
+  const before =
+    after.length < poolSize
+      ? await prisma.$queryRaw<{ itemId: string; vector: string }[]>`
+          SELECT ie."itemId" AS "itemId", ie.vector::text AS vector
+          FROM "ItemEmbedding" ie
+          JOIN "ClothingItem" ci ON ci.id = ie."itemId"
+          WHERE ie.model = ${EMBEDDING_MODEL}
+            AND ${filterSql}
+            AND ie."itemId" < ${pivot}
+          ORDER BY ie."itemId"
+          LIMIT ${poolSize - after.length}
+        `
+      : [];
+  const rows = [...after, ...before];
   if (rows.length === 0) return [];
 
   // For each candidate, score = max(sim to any cluster). Keep lowest.
@@ -725,22 +757,9 @@ async function coldStartFeed(
 ): Promise<FeedEntry[]> {
   // Apply tag-preference filter as a soft preference: get a larger random pool,
   // then prefer items that overlap with stylePreferences / favoriteBrands.
-  const filterClauses = buildItemFilterSql(excludeIds, filters);
-  const filterSql = Prisma.join(filterClauses, " AND ");
   const poolSize = Math.max(limit * 3, 60);
-
-  const ids = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT ci.id
-    FROM "ClothingItem" ci
-    WHERE ${filterSql}
-    ORDER BY RANDOM()
-    LIMIT ${poolSize}
-  `;
-  if (ids.length === 0) return [];
-
-  const items = await prisma.clothingItem.findMany({
-    where: { id: { in: ids.map((r) => r.id) } },
-  });
+  const items = await fetchRandomItems(poolSize, excludeIds, filters);
+  if (items.length === 0) return [];
 
   const styleSet = new Set(user.stylePreferences.map((s) => s.toLowerCase()));
   const brandSet = new Set(user.favoriteBrands.map((s) => s.toLowerCase()));
@@ -788,10 +807,8 @@ async function buildExplorationOnlyFeed(
   nNovelty: number,
   nRandom: number,
 ): Promise<FeedEntry[]> {
-  const [noveltyPicks, randomItems] = await Promise.all([
-    fetchNoveltyItems(nNovelty, excludeIds, filters, clusters),
-    fetchRandomItems(nRandom, excludeIds, filters),
-  ]);
+  const noveltyPicks = await fetchNoveltyItems(nNovelty, excludeIds, filters, clusters);
+  const randomItems = await fetchRandomItems(nRandom, excludeIds, filters);
   const noveltyEntries: FeedEntry[] = noveltyPicks.map((pick) => ({
     item: pick.item,
     match: noveltyMatch(pick.item.id, pick.clusterIndex, pick.maxSim),
@@ -822,13 +839,11 @@ export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<FeedEn
     ]),
   ];
 
-  const [user, clusterState] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: userId },
-      select: { stylePreferences: true, favoriteBrands: true, gender: true },
-    }),
-    getUserClusters(userId),
-  ]);
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { stylePreferences: true, favoriteBrands: true, gender: true },
+  });
+  const clusterState = await getUserClusters(userId);
   if (!user) return [];
 
   if (clusterState.clusters.length === 0) {
@@ -857,12 +872,10 @@ export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<FeedEn
 
   // 2. Hydrate item rows + dislike distances for scoring.
   const candidateIds = candidates.map((c) => c.itemId);
-  const [items, dislikeDist] = await Promise.all([
-    prisma.clothingItem.findMany({ where: { id: { in: candidateIds } } }),
-    clusterState.dislikeCentroid
-      ? dislikeDistancesFor(candidateIds, clusterState.dislikeCentroid)
-      : Promise.resolve(new Map<string, number>()),
-  ]);
+  const items = await prisma.clothingItem.findMany({ where: { id: { in: candidateIds } } });
+  const dislikeDist = clusterState.dislikeCentroid
+    ? await dislikeDistancesFor(candidateIds, clusterState.dislikeCentroid)
+    : new Map<string, number>();
   const itemsById = new Map(items.map((i) => [i.id, i]));
 
   // 3. Score, rank, diversify.
@@ -884,10 +897,13 @@ export async function buildPersonalizedFeed(args: BuildFeedArgs): Promise<FeedEn
   // 4. Exploration: items not already in personalized set.
   const personalizedIds = new Set(personalized.map((e) => e.item.id));
   const expExclude = [...excludeIds, ...personalizedIds];
-  const [noveltyPicks, randomItems] = await Promise.all([
-    fetchNoveltyItems(nNovelty, expExclude, filters, clusterState.clusters),
-    fetchRandomItems(nRandom, [...expExclude], filters),
-  ]);
+  const noveltyPicks = await fetchNoveltyItems(
+    nNovelty,
+    expExclude,
+    filters,
+    clusterState.clusters,
+  );
+  const randomItems = await fetchRandomItems(nRandom, [...expExclude], filters);
 
   const noveltyEntries: FeedEntry[] = noveltyPicks.map((p) => ({
     item: p.item,

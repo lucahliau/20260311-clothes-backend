@@ -4,15 +4,16 @@ import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { toFeedItem } from "../lib/wire.js";
 import { requireAuth } from "../middleware/auth.js";
+import { expensiveReadAdmission } from "../middleware/admission.js";
 
 const router = Router();
 
 /** Effectively “all brands” for distinct-brand listing; still capped to avoid abuse. */
-const DEFAULT_LIST_LIMIT = 100_000;
-const MAX_LIST_LIMIT = 500_000;
+const DEFAULT_LIST_LIMIT = 500;
+const MAX_LIST_LIMIT = 500;
 const DEFAULT_EXPLORE_LIMIT = 12;
 /** Max rows returned by the random explore query (distinct brand groups). */
-const MAX_EXPLORE_LIMIT = 100_000;
+const MAX_EXPLORE_LIMIT = 100;
 
 // ---------------------------------------------------------------------------
 // GET /brands/explore
@@ -24,23 +25,32 @@ const MAX_EXPLORE_LIMIT = 100_000;
 const EXPLORE_CACHE_TTL_MS = 60_000;
 let exploreCache: { rows: { brand: string; productCount: number }[]; expiresAt: number } | null =
   null;
+let exploreCacheBuild: Promise<{ brand: string; productCount: number }[]> | null = null;
 
 async function getExploreBrandGroups(): Promise<{ brand: string; productCount: number }[]> {
   const now = Date.now();
   if (exploreCache && exploreCache.expiresAt > now) return exploreCache.rows;
+  if (exploreCacheBuild) return exploreCacheBuild;
 
-  const rows = await prisma.$queryRaw<{ brand: string; productCount: bigint }[]>`
-    SELECT brand, COUNT(*)::bigint AS "productCount"
-    FROM "ClothingItem"
-    WHERE active = true AND "hasPerson" IS NOT TRUE
-    GROUP BY brand
-  `;
-  const mapped = rows.map((r) => ({ brand: r.brand, productCount: Number(r.productCount) }));
-  exploreCache = { rows: mapped, expiresAt: now + EXPLORE_CACHE_TTL_MS };
-  return mapped;
+  exploreCacheBuild = (async () => {
+    const rows = await prisma.$queryRaw<{ brand: string; productCount: bigint }[]>`
+      SELECT brand, COUNT(*)::bigint AS "productCount"
+      FROM "ClothingItem"
+      WHERE active = true AND "hasPerson" IS NOT TRUE
+      GROUP BY brand
+    `;
+    const mapped = rows.map((r) => ({ brand: r.brand, productCount: Number(r.productCount) }));
+    exploreCache = { rows: mapped, expiresAt: Date.now() + EXPLORE_CACHE_TTL_MS };
+    return mapped;
+  })();
+  try {
+    return await exploreCacheBuild;
+  } finally {
+    exploreCacheBuild = null;
+  }
 }
 
-router.get("/explore", async (req: Request, res: Response) => {
+router.get("/explore", expensiveReadAdmission, async (req: Request, res: Response) => {
   const limit = Math.min(
     MAX_EXPLORE_LIMIT,
     Math.max(1, Number(req.query.limit) || DEFAULT_EXPLORE_LIMIT),
@@ -80,6 +90,7 @@ type FeaturedBrandEntry = {
   items: ReturnType<typeof toFeedItem>[];
 };
 let featuredCache: { entries: FeaturedBrandEntry[]; expiresAt: number } | null = null;
+let featuredCacheBuild: Promise<FeaturedBrandEntry[]> | null = null;
 
 /** Builds (and caches ~5 min) collage entries for EVERY qualifying brand;
  * requests shuffle + slice the cached array so responses stay random without
@@ -87,54 +98,63 @@ let featuredCache: { entries: FeaturedBrandEntry[]; expiresAt: number } | null =
 async function getFeaturedBrandEntries(): Promise<FeaturedBrandEntry[]> {
   const now = Date.now();
   if (featuredCache && featuredCache.expiresAt > now) return featuredCache.entries;
+  if (featuredCacheBuild) return featuredCacheBuild;
 
-  const groups = (await getExploreBrandGroups()).filter(
-    (g) => g.productCount > FEATURED_MIN_PRODUCT_COUNT,
-  );
+  featuredCacheBuild = (async () => {
+    const groups = (await getExploreBrandGroups()).filter(
+      (g) => g.productCount > FEATURED_MIN_PRODUCT_COUNT,
+    );
 
-  let entries: FeaturedBrandEntry[] = [];
-  if (groups.length > 0) {
-    // Ids only from the window query; hydrate via findMany so Decimal/date
-    // serialization matches every other items route.
-    const idRows = await prisma.$queryRaw<{ id: string; brand: string }[]>`
-      SELECT id, brand FROM (
-        SELECT ci.id, ci.brand,
-               row_number() OVER (PARTITION BY ci.brand ORDER BY random()) AS rn
-        FROM "ClothingItem" ci
-        WHERE ci.brand IN (${Prisma.join(groups.map((g) => g.brand))})
-          AND ci.active = true
-          AND ci."isClothing" IS NOT FALSE
-          AND ci."hasPerson" IS NOT TRUE
-          AND ci."imageUrl" IS NOT NULL
-      ) ranked
-      WHERE rn <= ${FEATURED_COLLAGE_ITEMS}
-    `;
-    const ids = idRows.map((r) => r.id);
-    const rows = ids.length
-      ? await prisma.clothingItem.findMany({ where: { id: { in: ids } } })
-      : [];
-    const byBrand = new Map<string, ClothingItem[]>();
-    for (const row of rows) {
-      const list = byBrand.get(row.brand) ?? [];
-      list.push(row);
-      byBrand.set(row.brand, list);
+    let entries: FeaturedBrandEntry[] = [];
+    if (groups.length > 0) {
+      // Stable indexed order avoids a full-catalog random sort. Brand order is
+      // still shuffled per response, and the 5-minute cache keeps this cold
+      // build off the request hot path.
+      const idRows = await prisma.$queryRaw<{ id: string; brand: string }[]>`
+        SELECT id, brand FROM (
+          SELECT ci.id, ci.brand,
+                 row_number() OVER (PARTITION BY ci.brand ORDER BY ci.id) AS rn
+          FROM "ClothingItem" ci
+          WHERE ci.brand IN (${Prisma.join(groups.map((g) => g.brand))})
+            AND ci.active = true
+            AND ci."isClothing" IS NOT FALSE
+            AND ci."hasPerson" IS NOT TRUE
+            AND ci."imageUrl" IS NOT NULL
+        ) ranked
+        WHERE rn <= ${FEATURED_COLLAGE_ITEMS}
+      `;
+      const ids = idRows.map((r) => r.id);
+      const rows = ids.length
+        ? await prisma.clothingItem.findMany({ where: { id: { in: ids } } })
+        : [];
+      const byBrand = new Map<string, ClothingItem[]>();
+      for (const row of rows) {
+        const list = byBrand.get(row.brand) ?? [];
+        list.push(row);
+        byBrand.set(row.brand, list);
+      }
+      entries = groups
+        .map((g) => ({
+          brand: g.brand,
+          productCount: g.productCount,
+          items: (byBrand.get(g.brand) ?? []).map((row) =>
+            toFeedItem(row, FEATURED_COLLAGE_CDN_WIDTH),
+          ),
+        }))
+        .filter((e) => e.items.length > 0);
     }
-    entries = groups
-      .map((g) => ({
-        brand: g.brand,
-        productCount: g.productCount,
-        items: (byBrand.get(g.brand) ?? []).map((row) =>
-          toFeedItem(row, FEATURED_COLLAGE_CDN_WIDTH),
-        ),
-      }))
-      .filter((e) => e.items.length > 0);
-  }
 
-  featuredCache = { entries, expiresAt: now + FEATURED_CACHE_TTL_MS };
-  return entries;
+    featuredCache = { entries, expiresAt: Date.now() + FEATURED_CACHE_TTL_MS };
+    return entries;
+  })();
+  try {
+    return await featuredCacheBuild;
+  } finally {
+    featuredCacheBuild = null;
+  }
 }
 
-router.get("/featured", async (req: Request, res: Response) => {
+router.get("/featured", expensiveReadAdmission, async (req: Request, res: Response) => {
   const limit = Math.min(
     FEATURED_MAX_LIMIT,
     Math.max(1, Number(req.query.limit) || FEATURED_DEFAULT_LIMIT),
@@ -217,7 +237,7 @@ router.put("/favorites", requireAuth, async (req: Request, res: Response) => {
 // GET /brands  (distinct brands, optional prefix search)
 // ---------------------------------------------------------------------------
 
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", expensiveReadAdmission, async (req: Request, res: Response) => {
   const limit = Math.min(
     MAX_LIST_LIMIT,
     Math.max(1, Number(req.query.limit) || DEFAULT_LIST_LIMIT),

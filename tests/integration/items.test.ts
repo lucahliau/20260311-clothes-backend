@@ -26,10 +26,10 @@ describe("items catalog", () => {
     expect(res.body.pagination).toMatchObject({ page: 2, limit: 10, total: 25, totalPages: 3 });
   });
 
-  it("clamps absurd limits to the server-side maximum (10k)", async () => {
+  it("clamps absurd limits to the server-side maximum (200)", async () => {
     const res = await request(app()).get("/items?limit=999999");
     expect(res.status).toBe(200);
-    expect(res.body.pagination.limit).toBe(10_000);
+    expect(res.body.pagination.limit).toBe(200);
   });
 
   it("filters by brand and search term", async () => {
