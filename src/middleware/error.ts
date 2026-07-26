@@ -13,6 +13,23 @@ export class AppError extends Error {
   }
 }
 
+/** Saturation is expected capacity pressure, not an application defect. */
+export function isDatabaseBusyError(err: unknown): boolean {
+  let current: unknown = err;
+  const messages: string[] = [];
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth++) {
+    const value = current as { code?: unknown; message?: unknown; cause?: unknown };
+    if (value.code === "P2024" || value.code === "57014" || value.code === "ECHECKOUTTIMEOUT") {
+      return true;
+    }
+    if (typeof value.message === "string") messages.push(value.message);
+    current = value.cause;
+  }
+  return /ECHECKOUTTIMEOUT|unable to check out connection|canceling statement due to statement timeout|timed out fetching a new connection/i.test(
+    messages.join(" "),
+  );
+}
+
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   // 1. Determine Status Code, Error Code, Message, and Details
   let statusCode = 500;
@@ -25,6 +42,11 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     code = err.code;
     message = err.message;
     details = err.details;
+  } else if (isDatabaseBusyError(err)) {
+    statusCode = 503;
+    code = "SERVER_BUSY";
+    message = "The catalog is busy. Try again shortly.";
+    res.setHeader("Retry-After", "2");
   } else if (err instanceof ZodError) {
     statusCode = 400;
     code = "VALIDATION_ERROR";
@@ -59,7 +81,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   // 2. Log via the request-scoped logger so reqId + userId are bound. 5xx
   //    gets a full stack (also auto-captured to Sentry by setupExpressErrorHandler);
   //    4xx is a warn with just the response shape, since the client triggered it.
-  const isInternal = statusCode >= 500;
+  const isInternal = statusCode >= 500 && code !== "SERVER_BUSY";
   const log = req.log;
   if (isInternal) {
     log.error({ err, statusCode, code }, `${req.method} ${req.path} >> ${statusCode} ${code}`);

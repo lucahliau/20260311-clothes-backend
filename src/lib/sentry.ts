@@ -13,6 +13,7 @@
 
 import * as Sentry from "@sentry/node";
 import type { Express, Request } from "express";
+import { isDatabaseBusyError } from "../middleware/error.js";
 
 let initialized = false;
 
@@ -68,6 +69,7 @@ export function attachSentryErrorHandler(app: Express): void {
   if (!initialized) return;
   Sentry.setupExpressErrorHandler(app, {
     shouldHandleError: (err) => {
+      if (isDatabaseBusyError(err)) return false;
       const status =
         (err as { statusCode?: number; status?: number }).statusCode ??
         (err as { status?: number }).status ??

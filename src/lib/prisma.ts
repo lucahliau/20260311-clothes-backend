@@ -73,11 +73,11 @@ export async function checkDbReadiness(): Promise<DbReadiness> {
       inTransaction = true;
       await client.query("SET LOCAL statement_timeout = '1500ms'");
       await client.query(`
-        SELECT id
+        SELECT COUNT(*)
         FROM "ClothingItem"
-        WHERE active = true AND "hasPerson" IS NOT TRUE
-        ORDER BY "createdAt" DESC
-        LIMIT 1
+        WHERE active = true
+          AND "isClothing" IS NOT FALSE
+          AND "hasPerson" IS NOT TRUE
       `);
       await client.query("ROLLBACK");
       inTransaction = false;
