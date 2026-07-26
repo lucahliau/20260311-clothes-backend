@@ -22,6 +22,12 @@ const adapter = new PrismaPg(pool);
 
 export const prisma = new PrismaClient({ adapter });
 
+const configuredReadinessMaxLatency = Number(process.env.DB_READY_MAX_LATENCY_MS);
+const readinessMaxLatencyMs =
+  Number.isFinite(configuredReadinessMaxLatency) && configuredReadinessMaxLatency > 0
+    ? Math.floor(configuredReadinessMaxLatency)
+    : 2_500;
+
 export type DbReadiness = {
   ok: boolean;
   latencyMs: number;
@@ -75,7 +81,13 @@ export async function checkDbReadiness(): Promise<DbReadiness> {
       `);
       await client.query("ROLLBACK");
       inTransaction = false;
-      return { ok: true, latencyMs: Date.now() - startedAt, pool: stats() };
+      const latencyMs = Date.now() - startedAt;
+      return {
+        ok: latencyMs <= readinessMaxLatencyMs,
+        latencyMs,
+        pool: stats(),
+        ...(latencyMs > readinessMaxLatencyMs ? { reason: "catalog_probe_slow" } : {}),
+      };
     } catch (_err) {
       if (client && inTransaction) await client.query("ROLLBACK").catch(() => undefined);
       return {
