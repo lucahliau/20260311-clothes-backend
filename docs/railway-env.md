@@ -15,7 +15,8 @@ Set these on the Railway service (Variables). Redeploy after changes if the plat
 | `RESEND_FROM_EMAIL`  | `onboarding@resend.dev` or `Name <noreply@yourdomain.com>`   | Defaults to `onboarding@resend.dev` (Resend test sender). For production, use an address on a **verified domain** in the Resend dashboard. |
 
 Optional shared-database protection: `DB_HEAVY_REQUEST_CONCURRENCY` defaults to `4`;
-`DB_READY_MAX_LATENCY_MS` defaults to `2500`.
+`DB_READY_MAX_LATENCY_MS` defaults to `2500`; `DB_STATEMENT_TIMEOUT_MS` defaults to `8000`;
+`DB_QUERY_TIMEOUT_MS` defaults to `10000`.
 
 If Resend rejects the send (invalid `from`, unverified domain, etc.), `POST /auth/forgot-password` returns **503** with `EMAIL_SEND_FAILED` instead of a silent 200.
 

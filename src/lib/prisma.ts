@@ -8,6 +8,11 @@ if (typeof connectionString !== "string" || connectionString.length === 0) {
   throw new Error("DATABASE_URL is missing or invalid. Check your .env file.");
 }
 
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
 const pool = new Pool({
   connectionString,
   // Keep foreground API capacity bounded. Expensive catalog routes have
@@ -16,17 +21,17 @@ const pool = new Pool({
   max: 6,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
+  // Bound DB work before an iOS request can hang through the pooler's longer
+  // transaction-mode timeout. Saturation is returned as a retryable 503.
+  statement_timeout: positiveIntegerEnv("DB_STATEMENT_TIMEOUT_MS", 8_000),
+  query_timeout: positiveIntegerEnv("DB_QUERY_TIMEOUT_MS", 10_000),
   application_name: "clothedd-api",
 });
 const adapter = new PrismaPg(pool);
 
 export const prisma = new PrismaClient({ adapter });
 
-const configuredReadinessMaxLatency = Number(process.env.DB_READY_MAX_LATENCY_MS);
-const readinessMaxLatencyMs =
-  Number.isFinite(configuredReadinessMaxLatency) && configuredReadinessMaxLatency > 0
-    ? Math.floor(configuredReadinessMaxLatency)
-    : 2_500;
+const readinessMaxLatencyMs = positiveIntegerEnv("DB_READY_MAX_LATENCY_MS", 2_500);
 
 export type DbReadiness = {
   ok: boolean;

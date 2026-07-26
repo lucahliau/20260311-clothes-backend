@@ -12,6 +12,7 @@ describe("isDatabaseBusyError", () => {
       true,
     );
     expect(isDatabaseBusyError({ code: "P2024" })).toBe(true);
+    expect(isDatabaseBusyError(new Error("Query read timeout"))).toBe(true);
   });
 
   it("does not hide unrelated application failures", () => {

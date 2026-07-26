@@ -25,7 +25,7 @@ export function isDatabaseBusyError(err: unknown): boolean {
     if (typeof value.message === "string") messages.push(value.message);
     current = value.cause;
   }
-  return /ECHECKOUTTIMEOUT|unable to check out connection|canceling statement due to statement timeout|timed out fetching a new connection/i.test(
+  return /ECHECKOUTTIMEOUT|unable to check out connection|canceling statement due to statement timeout|timed out fetching a new connection|query read timeout/i.test(
     messages.join(" "),
   );
 }
