@@ -273,30 +273,39 @@ FROM "ClothingItem";
 --
 -- Rules are regexes over pg_temp.norm() text, lowest prio wins. scope:
 --   r = raw category only, n = product name / subcategory only, b = both.
--- '~tops' / '~bottoms' / '~acc' are GENERIC results: the raw category only
--- says "some top" / "some bottom" / "some accessory", so the product name is
--- allowed to refine them.
+-- Results starting with '~' are GENERIC: the raw category only says "some
+-- top" / "some bottom" / "some accessory" (or mixes two families, e.g.
+-- "Pantalons et Shorts", "Pulls et Sweats"), so the product name may refine
+-- it; with no name signal the generic falls back to its family default.
 \echo
 \echo ==== 3. categories ====
 CREATE TEMP TABLE _rule (prio int, scope char(1), canon text, re text);
 INSERT INTO _rule VALUES
 -- non-wearables named by the raw category
-(5, 'r', 'other', '\m(towels?|asciugaman[oi]|serviettes?|blankets?|candles?|bougies?|incense|books?|magazines?|publications?|stickers?|decals?|surfboards?|shortboards?|longboards?|skateboards?|fins?|leash(es)?|mugs?|cups?|cookware|cutlery|tents?|tarps?|stoves?|lanterns?|tables?|chairs?|grills?|fireplace|gift ?cards?|cadeaux?|gifting|fragrances?|colognes?|parfums?|home|homeware|kitchen|dining|pets?|animali|coffee|bitters|jerky|posters?|art prints?|patches|magnets?|care|soaps?|coasters?|bottles?|flasks?|cots?|stakes?|poles?|containers?|coolers?|camping|oven|tablewares?|bowls?|plates?|custodie|buttons?|parts|velcro|sporting goods|culturel|electronics|bundle|goods)\M'),
+(5, 'r', 'other', '\m(towels?|asciugaman[oi]|serviettes?|blankets?|candles?|bougies?|incense|books?|magazines?|publications?|stickers?|decals?|surfboards?|shortboards?|longboards?|skateboards?|fins?|leash(es)?|mugs?|cups?|cookware|cutlery|tents?|tarps?|stoves?|lanterns?|tables?|chairs?|grills?|fireplace|gift ?cards?|fragrances?|colognes?|parfums?|home|homeware|kitchen|dining|pets?|animali|coffee|bitters|jerky|posters?|art prints?|patches|magnets?|care|soaps?|coasters?|bottles?|flasks?|cots?|stakes?|poles?|containers?|coolers?|camping|oven|tablewares?|bowls?|plates?|custodie|parts|velcro|sporting goods|culturel|electronics|lighters?|puzzles?)\M'),
+(6, 'r', 'other', '^(buttons|goods)$'),
+(9, 'n', 'swimwear', '^costume (?!de |da sera)'),
 (10, 'b', 'swimwear', '\m(swim\w*|bikinis?|bagno|nuoto|costum[ei] (mare|inter[oi])|slip mare|bain|bade\w+|banador\w*|wetsuits?|springsuits?|boardshorts?|board shorts?|rash ?guards?|rashvests?|surf trunks?|swim trunks?|copricostume|monopezz[oi]|sarongs?|pareos?|one piece)\M'),
-(20, 'b', 'underwear & socks', '\m(socks?|chaussettes?|socquettes?|calze|calzini|calcetines|socken|strumpfe?|underwear|unterwasche|unterhosen?|boxers?|boxershorts?|briefs?|calecons?|sous vetements?|ss vetement|intimo|mutande|lingerie|bralettes?|bras?|pyjamas?|pajamas?|pigiam[ai]|nightwear|sleepwear|loungewear|nachtwasche|nuit|legwear|tights|collants?|chaussant)\M'),
+(20, 'b', 'underwear & socks', '\m(socks?|chaussettes?|socquettes?|calze|calzini|calcetines|socken|strumpfe?|underwear|unterwasche|unterhosen?|boxers?|boxershorts?|briefs?|calecons?|sous vetements?|ss vetement|intimo|mutande|lingerie|bralettes?|bras?|pyjamas?|pajamas?|pigiam[ai]|nightwear|sleepwear|loungewear|nachtwasche|nuit|legwear|tights|collants?)\M'),
 (30, 'b', 'dresses & skirts', '\m(dress(es)?(?! (shirts?|pants?|trousers?|socks?|shoes?|boots?|belts?|watch(es)?|sneakers?|codes?))|skirts?|skorts?|\w*kleid(er)?|(jeans|mini|midi|maxi|strick|falten|wickel)rock|jupes?|abit[io]|vestit[io]|vestidos?|gonn[ae]|faldas?|jumpsuits?|combinaisons?|playsuits?|rompers?|gowns?|kaftans?|caftans?|tunics?|tuniques?)\M'),
 (31, 'r', 'dresses & skirts', '\m(rocke?|robes?)\M'),
 (32, 'n', 'dresses & skirts', '^(robe|rock) '),
-(40, 'b', 'suits & blazers', '\m(blazers?|suits?(?! (trousers?|pants?|shorts?))|suiting|tailoring|tailored jackets?|sport ?coats?|sports? jackets?|tuxedos?|smokings?|waistcoats?|costumes?|anzuge?|sakkos?|trajes?|americanas?|dinner jackets?)\M'),
+(40, 'b', 'suits & blazers', '\m(blazers?|suits?(?! (trousers?|pants?|shorts?))|suiting|tailoring|tailored jackets?|sport ?coats?|sports? jackets?|tuxedos?|smokings?|waistcoats?|anzuge?|sakkos?|trajes?|dinner jackets?)\M'),
+(41, 'r', 'suits & blazers', '\m(costumes?|americanas?)\M'),
 (50, 'b', 'outerwear', '\m(jackets?|coats?|outerwear|parkas?|blousons?|vestes?|manteaux?|\w*jacken?|\w*mantel|giacc(a|he|one|oni)|giubbott[oi]|giubbin[oi]|cappott[oi]|piumin[oi]|chaquetas?|abrigos?|puffers?|anoraks?|windbreakers?|bombers?|raincoats?|trench\w*|doudounes?|impermeables?|cabans?|dufflecoat|kabig|cires?|polaires?|softshell|shackets?|capispalla|cazadoras?|ponchos?|peacoats?|overcoats?|macs?|k ?way)\M'),
 (51, 'r', 'outerwear', '\m(outer)\M'),
+(59, 'r', '~bottoms', '\m(pantalons (et )?shorts|trousers shorts|pants shorts)\M'),
 (60, 'b', 'shorts', '\m(shorts|\w+shorts|bermudas?|pantaloncini|pantaloni corti|walkshorts?)\M'),
 (61, 'r', 'shorts', '\mshort\M(?! (sleeves?|sleeved|manches))'),
 (62, 'n', 'shorts', '^short (?!(sleeves?|sleeved|manches))'),
 (70, 'b', 'jeans', '\m(jeans?|5 pockets?|five pockets?)\M'),
 (80, 'b', 'trousers', '\m(pants?|trousers?|pantalons?|pantalon[ei]|pantalones|\w*hosen?|chinos?|cargos?|joggers?|jogging|sweatpants?|trackpants?|leggings?|slacks|corduroys|dungarees|overalls?|salopettes?|culottes?)\M'),
-(90, 'b', 't-shirts', '\m(t ?shirts?|tees?|tee ?shirts?|magliett[ae]|camisetas?)\M'),
-(95, 'b', 'polos', '\m(polos?)\M'),
+(85, 'r', '~tops', '\m(jersey shirts|shirts tops|t shirts (et )?polos|polos (et )?t shirts|magliett[ae])\M'),
+(86, 'r', '~knit', '^knits$|\mtops knits\M|\m(pulls|mailles) et sweat\w*'),
+(87, 'r', '~sweats', '^sweats$'),
+(90, 'b', 't-shirts', '\m(t ?shirts?|tees?|tee ?shirts?|camisetas?)\M'),
+(91, 'n', 't-shirts', '\m(magliett[ae])\M'),
+(95, 'b', 'polos', '\m(polos?|\w*poloshirts?)\M'),
 (100, 'b', 'sweatshirts', '\m(sweatshirts?|sweat shirts?|sweats?|hoodies?|hoody|hood|felp[ae]|sudaderas?|kapuzen\w+|loopback|quarter ?zips?|half ?zips?|tracksuits?)\M'),
 (110, 'b', 'knitwear', '\m(sweaters?|jumpers?|\w*pullovers?|pull(?! on)|pulls|cardigans?|strickjacken?|maglion[ei]|maglieria|tricots?|sueters?|pullis?|pullunder|turtlenecks?|rollnecks?|roll necks?)\M'),
 (111, 'r', 'knitwear', '\m(knits?|knitwear|strick\w*|mailles?|maglie?)\M'),
@@ -315,7 +324,7 @@ INSERT INTO _rule VALUES
 (220, 'n', 'knitwear', '\m(knit|knits|knitted|knitwear|strick\w*|cashmere)\M'),
 (230, 'b', 'sweatshirts', '\m(fleeces?|crewnecks?|crew)\M'),
 (300, 'r', '~bottoms', '\m(bottoms?|bas)\M'),
-(310, 'r', '~acc', '\m(accessor\w*|accessoires?|acc)\M'),
+(310, 'r', '~acc', '\m(accessor\w*|accessoires?|acc|chaussant)\M'),
 -- non-wearables recognisable from the product name alone (after every garment rule)
 (900, 'n', 'other', '\m(candles?|incense|books?|stickers?|surfboards?|mugs?|blankets?|towels?|gift ?cards?|posters?|colognes?|air fresheners?|coasters?)\M');
 
@@ -346,8 +355,11 @@ SELECT id, raw, raw_n,
                       WHEN pg_temp.canon_cat(raw_n, 'r') IN ('underwear & socks', 'shoes', 'bags', 'hats', 'accessories', 'other')
                       THEN pg_temp.canon_cat(raw_n, 'r')
                       ELSE '~acc' END
+            -- the crawler's own coarse lower-case bucket, not a shop category
+            WHEN raw = 'outerwear' THEN '~outer'
             ELSE pg_temp.canon_cat(raw_n, 'r') END AS c_raw,
-       pg_temp.canon_cat(pg_temp.norm(name), 'n') AS c_name,
+       -- the brand is removed from the name first ("Rowing Blazers Sweater")
+       pg_temp.canon_cat(trim(replace(' ' || pg_temp.norm(name) || ' ', ' ' || pg_temp.norm(brand) || ' ', ' ')), 'n') AS c_name,
        pg_temp.canon_cat(pg_temp.norm(subcategory), 'n') AS c_sub,
        "productType" AS pt
 FROM (
@@ -373,6 +385,9 @@ UPDATE _cat SET final = CASE
   -- then the crawler's productType
   WHEN c_name IS NOT NULL AND c_name NOT LIKE '~%' THEN c_name
   WHEN c_sub IS NOT NULL AND c_sub NOT LIKE '~%' THEN c_sub
+  WHEN c_raw = '~outer' THEN 'outerwear'
+  WHEN c_raw = '~knit' THEN 'knitwear'
+  WHEN c_raw = '~sweats' THEN 'sweatshirts'
   WHEN '~tops' IN (c_raw, c_name, c_sub) THEN 'tops'
   WHEN c_raw = '~bottoms' THEN 'trousers'
   WHEN pt = 'tops' THEN 'tops'
@@ -430,8 +445,9 @@ FROM "ClothingItem";
 -- Evidence (word-boundary matched on normalised text, so "women" never
 -- matches "men"): URL path, raw category, raw brand/vendor, product name, and
 -- a few unambiguous description phrases ("da uomo", "pour femme", "mens
--- sizing"…). male + female evidence together, or an explicit "unisex", leaves
--- the row alone. Bare "man"/"woman"/"lady"/"boys"/"girls"/"baby" are not used
+-- sizing"…). Conflicting evidence (men's + women's, adult + kids), or an
+-- explicit "unisex", leaves the row alone. A bare /man/ or /woman/ only counts
+-- as a whole URL path segment. Bare "man"/"woman"/"lady"/"boys"/"girls"/"baby" are not used
 -- in names (Chainsaw Man, Lady White Co., Beastie Boys, baby alpaca…).
 \echo
 \echo ==== 4. gender ====
@@ -444,11 +460,11 @@ WHERE gender IN ('men', 'women');
 CREATE TEMP TABLE _g AS
 SELECT id, gender,
        concat_ws(' | ',
-         pg_temp.norm(pg_temp.url_path("sourceUrl")),
+         replace(pg_temp.norm(pg_temp.url_path("sourceUrl")), 'comme des garcons', ''),
          pg_temp.norm(coalesce(metadata->>'rawCategory', category)),
          pg_temp.norm(metadata->>'rawBrand'),
-         pg_temp.norm(name)) AS t,
-       pg_temp.norm(pg_temp.url_path("sourceUrl")) AS u,
+         replace(pg_temp.norm(name), 'comme des garcons', '')) AS t,
+       lower(pg_temp.url_path("sourceUrl")) AS u,
        pg_temp.norm(left(description, 4000)) AS d
 FROM "ClothingItem"
 WHERE gender = 'unisex' OR gender IS NULL;
@@ -456,21 +472,21 @@ WHERE gender = 'unisex' OR gender IS NULL;
 ALTER TABLE _g ADD COLUMN m boolean, ADD COLUMN f boolean, ADD COLUMN k boolean, ADD COLUMN x boolean;
 UPDATE _g SET
   m = t ~ '\m(men|mens|homme|hommes|herren|uomo|hombre|hombres|menswear)\M'
-      OR u ~ '\m(man)\M'
+      OR u ~ '/(man|uomo)(/|$)'
       OR d ~ '\m(da uomo|per uomo|pour hommes?|fur herren|para hombres?)\M'
       OR d ~ '\m(mens (sizing|fit|model|sizes?|classic fit)|(this|a|the|our) mens)\M',
   f = t ~ '\m(women|womens|wmns?|femme|femmes|damen|donna|mujer|mujeres|ladies|womenswear)\M'
-      OR u ~ '\m(woman)\M'
+      OR u ~ '/(woman|donna)(/|$)'
       OR d ~ '\m(da donna|per donna|pour femmes?|fur damen|para mujer(es)?)\M'
       OR d ~ '\m(womens (sizing|fit|model|sizes?)|(this|a|the|our) womens)\M',
-  k = t ~ '\m(kids|enfants?|bambin[oiae]|kinder|junior|juniors|toddlers?|youth|ninos?|ninas?|garcons?|fillettes?|childrens?)\M'
+  k = t ~ '\m(kids|enfants?|bambin[oiae]|kinder|junior|juniors|toddlers?|youth|garcons?|fillettes?|childrens?)\M'
       OR d ~ '\m(da bambin[oa]|per bambin[oia]|pour enfants?|for kids|fur kinder)\M',
   x = t ~ '\m(unisex|unisexe|mixte)\M';
 
 CREATE TEMP TABLE _g_fix AS
 SELECT id, CASE WHEN k THEN 'kids' WHEN m THEN 'male' ELSE 'female' END AS new_gender
 FROM _g
-WHERE NOT x AND ((k AND NOT (m AND f)) OR (m AND NOT f) OR (f AND NOT m));
+WHERE NOT x AND ((k AND NOT m AND NOT f) OR (m AND NOT f AND NOT k) OR (f AND NOT m AND NOT k));
 
 SELECT coalesce(g.gender, '(null)') AS old_gender, f.new_gender, count(*) AS rows
 FROM _g_fix f JOIN _g g USING (id) GROUP BY 1, 2 ORDER BY 3 DESC;
