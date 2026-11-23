@@ -568,6 +568,11 @@ UPDATE _d d SET dup_of = k.keeper FROM (
   WINDOW w AS (PARTITION BY u, nm, xid ORDER BY referenced DESC, created DESC, id)
 ) k WHERE k.id = d.id AND k.keeper <> d.id AND NOT d.referenced;
 
+-- a keeper chosen in an early pass can itself lose a later pass: point every
+-- duplicate at the row that finally survives (chains are at most 3 long)
+UPDATE _d d SET dup_of = p.dup_of FROM _d p WHERE p.id = d.dup_of AND p.dup_of IS NOT NULL;
+UPDATE _d d SET dup_of = p.dup_of FROM _d p WHERE p.id = d.dup_of AND p.dup_of IS NOT NULL;
+
 SELECT count(*) AS rows_to_deactivate, count(DISTINCT dup_of) AS kept_products
 FROM _d WHERE dup_of IS NOT NULL;
 
@@ -576,6 +581,11 @@ UPDATE "ClothingItem" c SET
   metadata = coalesce(c.metadata, '{}'::jsonb)
     || jsonb_build_object('duplicateOf', d.dup_of, 'deactivatedBy', 'cleanup-catalog')
 FROM _d d WHERE d.id = c.id AND d.dup_of IS NOT NULL;
+
+-- same repair for rows deactivated by an earlier run of this script
+UPDATE "ClothingItem" c SET metadata = c.metadata || jsonb_build_object('duplicateOf', k.metadata->>'duplicateOf')
+FROM "ClothingItem" k
+WHERE k.id = c.metadata->>'duplicateOf' AND NOT k.active AND k.metadata ? 'duplicateOf';
 
 SELECT count(*) FILTER (WHERE NOT active) AS inactive_rows,
        count(*) FILTER (WHERE metadata->>'deactivatedBy' = 'cleanup-catalog') AS deactivated_by_cleanup
