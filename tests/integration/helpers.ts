@@ -75,13 +75,22 @@ export function auth(token: string): { Authorization: string } {
 /** Seed N active catalog items directly (the crawler owns this table in prod). */
 export async function seedItems(
   n: number,
-  overrides: Partial<{ brand: string; category: string; gender: string }> = {},
+  overrides: Partial<{
+    brand: string;
+    category: string;
+    gender: string;
+    price: number;
+    salePrice: number | null;
+    inStock: boolean | null;
+  }> = {},
 ) {
   const data = Array.from({ length: n }, (_, i) => ({
     name: `Item ${i}`,
     brand: overrides.brand ?? "TestBrand",
     category: overrides.category ?? "tops",
-    price: 49.99,
+    price: overrides.price ?? 49.99,
+    salePrice: overrides.salePrice ?? null,
+    inStock: overrides.inStock ?? null,
     imageUrl: `https://img.test/i${i}.jpg`,
     gender: overrides.gender ?? "male",
     productType: "tops",

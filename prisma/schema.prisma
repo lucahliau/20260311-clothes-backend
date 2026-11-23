@@ -221,7 +221,9 @@ model ClothingItem {
   salePrice       Decimal? @db.Decimal(10, 2)
   compareAtPrice  Decimal? @db.Decimal(10, 2)
   // Stock from the retailer's live listing: NULL unknown, FALSE = sold out or
-  // delisted. Never used to hide items — the app shows a "SOLD OUT" tag.
+  // delisted. Lists/feed/brand counts hide FALSE by default (`"inStock" IS NOT
+  // FALSE`; GET /items?includeOutOfStock=true opts in); GET /items/:id and swipe
+  // history still return them, where the app shows a "SOLD OUT" tag.
   inStock         Boolean?
   imageUrl    String
   images      String[]

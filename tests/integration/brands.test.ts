@@ -55,3 +55,30 @@ describe("brand favorites", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("brand listing", () => {
+  beforeAll(async () => {
+    await resetDb();
+    await seedItems(3, { brand: "Big Brand" });
+    await seedItems(2, { brand: "Big Brand", inStock: false });
+    await seedItems(1, { brand: "Tiny Brand" });
+    await seedItems(2, { brand: "Sold Out Brand", inStock: false });
+  });
+
+  it("counts only in-stock (or unknown-stock) items and drops fully sold-out brands", async () => {
+    const res = await request(app()).get("/brands?limit=1000");
+    expect(res.status).toBe(200);
+    expect(res.body.brands).toEqual([
+      { brand: "Big Brand", productCount: 3 },
+      { brand: "Tiny Brand", productCount: 1 },
+    ]);
+  });
+
+  it("filters small brands with minProducts", async () => {
+    const res = await request(app()).get("/brands?minProducts=2");
+    expect(res.body.brands).toEqual([{ brand: "Big Brand", productCount: 3 }]);
+
+    const ignored = await request(app()).get("/brands?minProducts=abc");
+    expect(ignored.body.brands).toHaveLength(2);
+  });
+});

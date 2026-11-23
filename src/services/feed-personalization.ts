@@ -238,6 +238,8 @@ export function buildItemFilterSql(excludeIds: string[], filters: FeedFilters): 
     // Hide products whose only photos are of a model/person; NULL (unscanned)
     // stays visible.
     Prisma.sql`ci."hasPerson" IS NOT TRUE`,
+    // Never recommend sold-out items; NULL (stock unknown) stays visible.
+    Prisma.sql`ci."inStock" IS NOT FALSE`,
   ];
   if (excludeIds.length > 0) {
     clauses.push(Prisma.sql`ci.id NOT IN (${Prisma.join(excludeIds)})`);

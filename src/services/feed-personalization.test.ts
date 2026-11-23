@@ -6,6 +6,7 @@ import {
   calibrateScorePct,
   bucketForClusterSim,
   bucketForScorePct,
+  buildItemFilterSql,
 } from "./feed-personalization.js";
 import type { ClothingItem } from "../../generated/prisma/client.js";
 
@@ -212,5 +213,27 @@ describe("bucketForClusterSim", () => {
     expect(bucketForClusterSim(0.88)).toBe("medium"); // ~38%
     expect(bucketForClusterSim(0.86)).toBe("low"); // ~28%
     expect(bucketForClusterSim(0.5)).toBe("low"); // floored to 5%
+  });
+});
+
+describe("buildItemFilterSql", () => {
+  const sqlOf = (clauses: ReturnType<typeof buildItemFilterSql>) => clauses.map((c) => c.sql);
+
+  it("always hides inactive, sold-out, non-clothing and person-only items", () => {
+    const clauses = sqlOf(buildItemFilterSql([], {}));
+    expect(clauses).toContain("ci.active = true");
+    expect(clauses).toContain('ci."inStock" IS NOT FALSE');
+    expect(clauses).toContain('ci."isClothing" IS NOT FALSE');
+    expect(clauses).toContain('ci."hasPerson" IS NOT TRUE');
+  });
+
+  it("appends exclude-id, gender and product-type filters when given", () => {
+    const base = buildItemFilterSql([], {}).length;
+    const clauses = buildItemFilterSql(["a", "b"], {
+      gender: ["male", "unisex"],
+      productType: "tops",
+    });
+    expect(clauses).toHaveLength(base + 3);
+    expect(sqlOf(clauses).some((c) => c.startsWith("ci.gender IN ("))).toBe(true);
   });
 });

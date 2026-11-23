@@ -84,3 +84,64 @@ describe("items catalog", () => {
     );
   });
 });
+
+describe("items stock filter and price sort", () => {
+  let user: TestUser;
+
+  beforeAll(async () => {
+    await resetDb();
+    user = await createVerifiedUser();
+    await seedItems(1, { brand: "SortBrand", price: 80 });
+    await seedItems(1, { brand: "SortBrand", price: 120, salePrice: 30 });
+    await seedItems(1, { brand: "SortBrand", price: 50, inStock: true });
+    await seedItems(1, { brand: "SortBrand", price: 10, inStock: false });
+  });
+
+  it("hides out-of-stock items by default and returns them on opt-in", async () => {
+    const hidden = await request(app()).get("/items?brand=SortBrand");
+    expect(hidden.body.pagination.total).toBe(3);
+    expect(hidden.body.items.every((i: { inStock: boolean | null }) => i.inStock !== false)).toBe(
+      true,
+    );
+
+    const all = await request(app()).get("/items?brand=SortBrand&includeOutOfStock=true");
+    expect(all.body.pagination.total).toBe(4);
+
+    const search = await request(app()).get("/items?search=sortbrand");
+    expect(search.body.pagination.total).toBe(3);
+  });
+
+  it("sorts by effective price in both directions", async () => {
+    const prices = (r: { body: { items: { price: string; salePrice: string | null }[] } }) =>
+      r.body.items.map((i) => Number(i.salePrice ?? i.price));
+
+    const asc = await request(app()).get("/items?brand=SortBrand&sort=price_asc");
+    expect(asc.status).toBe(200);
+    expect(prices(asc)).toEqual([30, 50, 80]);
+    expect(asc.body.pagination).toMatchObject({ page: 1, total: 3, totalPages: 1 });
+
+    const desc = await request(app()).get(
+      "/items?brand=SortBrand&sort=price_desc&includeOutOfStock=true",
+    );
+    expect(prices(desc)).toEqual([80, 50, 30, 10]);
+
+    const page2 = await request(app()).get("/items?brand=SortBrand&sort=price_asc&limit=2&page=2");
+    expect(prices(page2)).toEqual([80]);
+  });
+
+  it("still serves an out-of-stock item by id and in swipe history", async () => {
+    const soldOut = await prisma.clothingItem.findFirstOrThrow({ where: { inStock: false } });
+    const byId = await request(app()).get(`/items/${soldOut.id}`);
+    expect(byId.status).toBe(200);
+
+    await request(app())
+      .post("/swipes")
+      .set(auth(user.accessToken))
+      .send({ itemId: soldOut.id, action: "LOVE" });
+    const history = await request(app())
+      .get("/swipes/history?action=LOVE,LIKE")
+      .set(auth(user.accessToken));
+    expect(history.body.swipes.map((s: { itemId: string }) => s.itemId)).toContain(soldOut.id);
+    expect(history.body.pagination).toMatchObject({ page: 1, total: 1, totalPages: 1 });
+  });
+});

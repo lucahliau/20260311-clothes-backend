@@ -5,6 +5,7 @@ import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { cdnImageUrl, withCdnImages } from "../lib/imageCdn.js";
 import { toFeedItem } from "../lib/wire.js";
+import { itemOrderBySql, parseBooleanFlag, parseItemSort } from "../lib/itemQuery.js";
 import { requireAuth } from "../middleware/auth.js";
 import { expensiveReadAdmission } from "../middleware/admission.js";
 import { AppError } from "../middleware/error.js";
@@ -69,6 +70,51 @@ function profileGenderToFilter(profileGender: string | null | undefined): string
   return null; // non-binary / unset / "everything" → no gender filter
 }
 
+/** Raw-SQL WHERE clauses for GET /items (shared by the search path and the
+ * price-sorted path). Mirrors the Prisma `where` built for the default path. */
+function buildListClauses(query: Request["query"]): Prisma.Sql[] {
+  const clauses: Prisma.Sql[] = [
+    Prisma.sql`active = true`,
+    // Hide classified non-wearables; NULL/unclassified stays visible.
+    Prisma.sql`"isClothing" IS NOT FALSE`,
+    // Hide person-only products; NULL (unscanned) stays visible.
+    Prisma.sql`"hasPerson" IS NOT TRUE`,
+  ];
+  // Hide sold-out items unless the client opts in; NULL (unknown) stays visible.
+  if (!parseBooleanFlag(query.includeOutOfStock)) {
+    clauses.push(Prisma.sql`"inStock" IS NOT FALSE`);
+  }
+  if (query.category) clauses.push(Prisma.sql`category = ${String(query.category)}`);
+  if (query.subcategory) clauses.push(Prisma.sql`subcategory = ${String(query.subcategory)}`);
+  if (query.brand) clauses.push(Prisma.sql`brand = ${String(query.brand)}`);
+  const gender = parseGender(query.gender);
+  if (gender) {
+    clauses.push(
+      Array.isArray(gender)
+        ? Prisma.sql`gender IN (${Prisma.join(gender)})`
+        : Prisma.sql`gender = ${gender}`,
+    );
+  }
+  const productType = parseProductType(query.productType);
+  if (productType) clauses.push(Prisma.sql`"productType" = ${productType}`);
+  if (query.minPrice) clauses.push(Prisma.sql`price >= ${Number(query.minPrice)}`);
+  if (query.maxPrice) clauses.push(Prisma.sql`price <= ${Number(query.maxPrice)}`);
+  // On-sale only. The crawler invariant guarantees compareAtPrice is non-null
+  // exactly when the item is genuinely discounted (compareAtPrice > price).
+  if (String(query.onSale).toLowerCase() === "true")
+    clauses.push(Prisma.sql`"compareAtPrice" IS NOT NULL`);
+  return clauses;
+}
+
+/** Hydrate full rows for an ordered id list, preserving that order. */
+async function hydrateInOrder(idOrder: string[]): Promise<ClothingItem[]> {
+  const found = idOrder.length
+    ? await prisma.clothingItem.findMany({ where: { id: { in: idOrder } } })
+    : [];
+  const byId = new Map(found.map((r) => [r.id, r]));
+  return idOrder.map((id) => byId.get(id)).filter((x): x is ClothingItem => x !== undefined);
+}
+
 const feedContinuationSchema = z.object({
   excludeIds: z.array(z.string().uuid()).max(MAX_CLIENT_EXCLUDE_IDS).default([]),
 });
@@ -95,33 +141,7 @@ router.get("/", expensiveReadAdmission, async (req: Request, res: Response) => {
     const like = `%${escaped}%`;
     const prefix = `${escaped}%`;
 
-    const clauses: Prisma.Sql[] = [
-      Prisma.sql`active = true`,
-      // Hide classified non-wearables; NULL/unclassified stays visible.
-      Prisma.sql`"isClothing" IS NOT FALSE`,
-      // Hide person-only products; NULL (unscanned) stays visible.
-      Prisma.sql`"hasPerson" IS NOT TRUE`,
-    ];
-    if (req.query.category) clauses.push(Prisma.sql`category = ${String(req.query.category)}`);
-    if (req.query.subcategory)
-      clauses.push(Prisma.sql`subcategory = ${String(req.query.subcategory)}`);
-    if (req.query.brand) clauses.push(Prisma.sql`brand = ${String(req.query.brand)}`);
-    const sGender = parseGender(req.query.gender);
-    if (sGender) {
-      clauses.push(
-        Array.isArray(sGender)
-          ? Prisma.sql`gender IN (${Prisma.join(sGender)})`
-          : Prisma.sql`gender = ${sGender}`,
-      );
-    }
-    const sProductType = parseProductType(req.query.productType);
-    if (sProductType) clauses.push(Prisma.sql`"productType" = ${sProductType}`);
-    if (req.query.minPrice) clauses.push(Prisma.sql`price >= ${Number(req.query.minPrice)}`);
-    if (req.query.maxPrice) clauses.push(Prisma.sql`price <= ${Number(req.query.maxPrice)}`);
-    // On-sale only. The crawler invariant guarantees compareAtPrice is non-null
-    // exactly when the item is genuinely discounted (compareAtPrice > price).
-    if (String(req.query.onSale).toLowerCase() === "true")
-      clauses.push(Prisma.sql`"compareAtPrice" IS NOT NULL`);
+    const clauses = buildListClauses(req.query);
     clauses.push(
       Prisma.sql`(name ILIKE ${like} OR description ILIKE ${like} OR brand ILIKE ${like})`,
     );
@@ -145,19 +165,35 @@ router.get("/", expensiveReadAdmission, async (req: Request, res: Response) => {
         SELECT COUNT(*)::bigint AS count FROM "ClothingItem" WHERE ${whereSql}
       `;
 
-    const idOrder = idRows.map((r) => r.id);
-    const found = idOrder.length
-      ? await prisma.clothingItem.findMany({ where: { id: { in: idOrder } } })
-      : [];
-    const byId = new Map(found.map((r) => [r.id, r]));
-    const rankedItems = idOrder
-      .map((id) => byId.get(id))
-      .filter((x): x is ClothingItem => x !== undefined)
-      .map(withCdnImages);
+    const rankedItems = (await hydrateInOrder(idRows.map((r) => r.id))).map(withCdnImages);
     const total = Number(countRows[0]?.count ?? 0);
 
     res.json({
       items: rankedItems,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+    return;
+  }
+
+  // Price sorts order by the effective price (salePrice when present, else
+  // price), NULLs last, id as a tiebreaker so pagination is stable. Prisma's
+  // orderBy can't express COALESCE, so this path goes through raw SQL.
+  const sort = parseItemSort(req.query.sort);
+  if (sort !== "newest") {
+    const whereSql = Prisma.join(buildListClauses(req.query), " AND ");
+    const idRows = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "ClothingItem"
+        WHERE ${whereSql}
+        ORDER BY ${itemOrderBySql(sort)}
+        LIMIT ${limit} OFFSET ${skip}
+      `;
+    const countRows = await prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count FROM "ClothingItem" WHERE ${whereSql}
+      `;
+    const sortedItems = (await hydrateInOrder(idRows.map((r) => r.id))).map(withCdnImages);
+    const total = Number(countRows[0]?.count ?? 0);
+    res.json({
+      items: sortedItems,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
     return;
@@ -174,6 +210,10 @@ router.get("/", expensiveReadAdmission, async (req: Request, res: Response) => {
     // field-level `not` excludes NULLs, so spell out the OR explicitly.
     { OR: [{ hasPerson: false }, { hasPerson: null }] },
   ];
+  // Hide sold-out items unless the client opts in; NULL (unknown) stays visible.
+  if (!parseBooleanFlag(req.query.includeOutOfStock)) {
+    and.push({ OR: [{ inStock: true }, { inStock: null }] });
+  }
 
   if (req.query.category) where.category = String(req.query.category);
   if (req.query.subcategory) where.subcategory = String(req.query.subcategory);
@@ -301,6 +341,8 @@ async function serveFeed(req: Request, res: Response) {
     Prisma.sql`"hasNobg" = true`,
     Prisma.sql`"isClothing" IS NOT FALSE`,
     Prisma.sql`"hasPerson" IS NOT TRUE`,
+    // Never surface sold-out items in the feed; NULL (unknown) stays visible.
+    Prisma.sql`"inStock" IS NOT FALSE`,
   ];
   if (excludeIds.length > 0) {
     sqlWhere.push(Prisma.sql`id NOT IN (${Prisma.join(excludeIds)})`);
@@ -444,6 +486,7 @@ router.get("/:id/similar", expensiveReadAdmission, async (req: Request, res: Res
           AND: [
             { OR: [{ isClothing: true }, { isClothing: null }] },
             { OR: [{ hasPerson: false }, { hasPerson: null }] },
+            { OR: [{ inStock: true }, { inStock: null }] },
           ],
         },
         orderBy: { createdAt: "desc" },
@@ -460,7 +503,9 @@ router.get("/:id/similar", expensiveReadAdmission, async (req: Request, res: Res
 router.get("/:id", async (req: Request, res: Response) => {
   const id = req.params.id as string;
   const item = await prisma.clothingItem.findFirst({
-    // Hide person-only products; NULL (unscanned) stays visible.
+    // Hide person-only products; NULL (unscanned) stays visible. Deliberately
+    // NOT filtered on inStock: a sold-out item the user already liked must
+    // still open from the wardrobe/history.
     where: { id, active: true, OR: [{ hasPerson: false }, { hasPerson: null }] },
   });
 

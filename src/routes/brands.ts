@@ -3,14 +3,17 @@ import { z } from "zod";
 import { Prisma, type ClothingItem } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { toFeedItem } from "../lib/wire.js";
+import { parseMinProducts } from "../lib/itemQuery.js";
 import { requireAuth } from "../middleware/auth.js";
 import { expensiveReadAdmission } from "../middleware/admission.js";
 
 const router = Router();
 
-/** Effectively “all brands” for distinct-brand listing; still capped to avoid abuse. */
+/** Effectively “all brands” for distinct-brand listing; still capped to avoid abuse.
+ * The catalog has ~550 brands, so the cap must sit above that for a client to
+ * fetch the full list in one call (default stays 500 for shipped builds). */
 const DEFAULT_LIST_LIMIT = 500;
-const MAX_LIST_LIMIT = 500;
+const MAX_LIST_LIMIT = 1000;
 const DEFAULT_EXPLORE_LIMIT = 12;
 /** Max rows returned by the random explore query (distinct brand groups). */
 const MAX_EXPLORE_LIMIT = 100;
@@ -36,7 +39,7 @@ async function getExploreBrandGroups(): Promise<{ brand: string; productCount: n
     const rows = await prisma.$queryRaw<{ brand: string; productCount: bigint }[]>`
       SELECT brand, COUNT(*)::bigint AS "productCount"
       FROM "ClothingItem"
-      WHERE active = true AND "hasPerson" IS NOT TRUE
+      WHERE active = true AND "hasPerson" IS NOT TRUE AND "inStock" IS NOT FALSE
       GROUP BY brand
     `;
     const mapped = rows.map((r) => ({ brand: r.brand, productCount: Number(r.productCount) }));
@@ -119,6 +122,7 @@ async function getFeaturedBrandEntries(): Promise<FeaturedBrandEntry[]> {
             AND ci.active = true
             AND ci."isClothing" IS NOT FALSE
             AND ci."hasPerson" IS NOT TRUE
+            AND ci."inStock" IS NOT FALSE
             AND ci."imageUrl" IS NOT NULL
         ) ranked
         WHERE rn <= ${FEATURED_COLLAGE_ITEMS}
@@ -189,7 +193,11 @@ router.get("/favorites", requireAuth, async (req: Request, res: Response) => {
 
   const grouped = await prisma.clothingItem.groupBy({
     by: ["brand"],
-    where: { active: true, brand: { in: favorites, mode: "insensitive" } },
+    where: {
+      active: true,
+      brand: { in: favorites, mode: "insensitive" },
+      OR: [{ inStock: true }, { inStock: null }],
+    },
     _count: { _all: true },
   });
   const countByBrand = new Map(grouped.map((g) => [g.brand.toLowerCase(), g._count._all]));
@@ -244,7 +252,14 @@ router.get("/", expensiveReadAdmission, async (req: Request, res: Response) => {
   );
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
 
-  const where: Prisma.ClothingItemWhereInput = { active: true };
+  // Optional floor on catalog size, e.g. ?minProducts=10 hides one-off brands.
+  const minProducts = parseMinProducts(req.query.minProducts);
+
+  // Sold-out items don't count towards a brand; NULL (unknown) does.
+  const where: Prisma.ClothingItemWhereInput = {
+    active: true,
+    OR: [{ inStock: true }, { inStock: null }],
+  };
   if (q) {
     where.brand = { contains: q, mode: "insensitive" };
   }
@@ -253,6 +268,7 @@ router.get("/", expensiveReadAdmission, async (req: Request, res: Response) => {
     by: ["brand"],
     where,
     _count: { _all: true },
+    ...(minProducts ? { having: { brand: { _count: { gte: minProducts } } } } : {}),
     orderBy: { brand: "asc" },
     take: limit,
   });
